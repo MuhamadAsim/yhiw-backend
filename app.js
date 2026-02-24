@@ -13,7 +13,7 @@ app.use(morgan("dev"));
 
 
 
-import userRoute from "./routes/userRoutes.js";
+import userRoute from "./routes/userAuthRoutes.js";
 
 
 
