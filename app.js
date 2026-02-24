@@ -13,7 +13,8 @@ app.use(morgan("dev"));
 
 
 
-import userRoute from "./routes/userAuthRoutes.js";
+import userAuthRoutes from "./routes/userAuthRoutes.js";
+import customerRoutes from "./routes/customerRoutes.js";
 
 
 
@@ -23,7 +24,8 @@ import userRoute from "./routes/userAuthRoutes.js";
 
 
 
-app.use("/api/users", userRoute);
+app.use("/api/users", userAuthRoutes);
+app.use("/api/customer",customerRoutes)
 
 
 
