@@ -1,19 +1,7 @@
 import User from '../models/userModel.js';
-import jwt from 'jsonwebtoken';
 
-// Generate JWT Token
-const generateToken = (user) => {
-  return jwt.sign(
-    { 
-      id: user._id,
-      firebaseUserId: user.firebaseUserId,
-      email: user.email,
-      role: user.role 
-    },
-    process.env.JWT_SECRET || 'your-secret-key',
-    { expiresIn: '30d' }
-  );
-};
+
+
 
 /**
  * @desc    Create a new user (Signup)
@@ -69,10 +57,7 @@ export const createUser = async (req, res) => {
       status: 'active'
     });
 
-    // Generate JWT token
-    const token = generateToken(newUser);
-
-    // Return user data with token
+    // Return user data (excluding sensitive info)
     const userResponse = {
       id: newUser._id,
       firebaseUserId: newUser.firebaseUserId,
@@ -87,8 +72,7 @@ export const createUser = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'User created successfully',
-      data: userResponse,
-      token: token  // Send token to frontend
+      data: userResponse
     });
 
   } catch (error) {
@@ -119,6 +103,11 @@ export const createUser = async (req, res) => {
   }
 };
 
+
+
+
+
+
 /**
  * @desc    Get user by Firebase UID (Signin)
  * @route   GET /api/users/:firebaseUserId
@@ -144,10 +133,7 @@ export const getUserByFirebaseId = async (req, res) => {
       });
     }
 
-    // Generate JWT token
-    const token = generateToken(user);
-
-    // Return user data with token
+    // Return user data (excluding sensitive info)
     const userResponse = {
       id: user._id,
       firebaseUserId: user.firebaseUserId,
@@ -161,8 +147,7 @@ export const getUserByFirebaseId = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: userResponse,
-      token: token  // Send token to frontend
+      data: userResponse
     });
 
   } catch (error) {
@@ -173,6 +158,13 @@ export const getUserByFirebaseId = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+
+
 
 /**
  * @desc    Update user profile
@@ -208,10 +200,7 @@ export const updateUser = async (req, res) => {
 
     await user.save();
 
-    // Generate new token (optional - if you want to refresh token)
-    const token = generateToken(user);
-
-    // Return updated user with new token
+    // Return updated user
     const userResponse = {
       id: user._id,
       firebaseUserId: user.firebaseUserId,
@@ -227,8 +216,7 @@ export const updateUser = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'User updated successfully',
-      data: userResponse,
-      token: token  // Optional: send new token
+      data: userResponse
     });
 
   } catch (error) {
@@ -255,6 +243,13 @@ export const updateUser = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+
+
 
 /**
  * @desc    Delete ALL users from the database (DANGER ZONE)
@@ -291,6 +286,56 @@ export const deleteAllUsers = async (req, res) => {
       success: false,
       message: 'Server error deleting users',
       error: error.message
+    });
+  }
+};
+
+
+
+
+
+
+
+
+
+/**
+ * @desc    Print all users to console (for debugging)
+ * @route   GET /api/users/print-all
+ * @access  Private/Admin only
+ */
+export const printAllUsers = async (req, res) => {
+  try {
+    const users = await User.find({}).lean();
+    
+    console.log('\n========== ALL USERS ==========');
+    console.log(`Total users: ${users.length}`);
+    console.log('===============================\n');
+    
+    users.forEach((user, index) => {
+      console.log(`----- User ${index + 1} -----`);
+      console.log(`ID: ${user._id}`);
+      console.log(`Firebase UID: ${user.firebaseUserId}`);
+      console.log(`Full Name: ${user.fullName}`);
+      console.log(`Email: ${user.email}`);
+      console.log(`Phone: ${user.phoneNumber}`);
+      console.log(`Role: ${user.role}`);
+      console.log(`Status: ${user.status}`);
+      console.log(`Created: ${user.createdAt}`);
+      console.log(`Updated: ${user.updatedAt}`);
+      console.log('------------------------\n');
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Printed ${users.length} users to console`,
+      count: users.length
+    });
+
+  } catch (error) {
+    console.error('Print Users Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error printing users'
     });
   }
 };
