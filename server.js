@@ -15,7 +15,7 @@ const startServer = async () => {
     await printAllUsers(); 
     
     // 🚨 EXTREMELY DANGEROUS
-    // await deleteAllUsers();  
+    await deleteAllUsers();  
 
 
   const server = app.listen(PORT, () => {

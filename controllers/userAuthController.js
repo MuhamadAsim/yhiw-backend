@@ -1,7 +1,15 @@
 import User from '../models/userModel.js';
+import jwt from 'jsonwebtoken';
 
 
 
+
+// Generate JWT Token
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
+    expiresIn: '30d' // Token expires in 30 days
+  });
+};
 
 /**
  * @desc    Create a new user (Signup)
@@ -57,7 +65,10 @@ export const createUser = async (req, res) => {
       status: 'active'
     });
 
-    // Return user data (excluding sensitive info)
+    // Generate JWT token
+    const token = generateToken(newUser._id);
+
+    // Return user data with token
     const userResponse = {
       id: newUser._id,
       firebaseUserId: newUser.firebaseUserId,
@@ -66,7 +77,8 @@ export const createUser = async (req, res) => {
       phoneNumber: newUser.phoneNumber,
       role: newUser.role,
       status: newUser.status,
-      createdAt: newUser.createdAt
+      createdAt: newUser.createdAt,
+      token // Include JWT token in response
     };
 
     res.status(201).json({
@@ -103,11 +115,6 @@ export const createUser = async (req, res) => {
   }
 };
 
-
-
-
-
-
 /**
  * @desc    Get user by Firebase UID (Signin)
  * @route   GET /api/users/:firebaseUserId
@@ -133,7 +140,10 @@ export const getUserByFirebaseId = async (req, res) => {
       });
     }
 
-    // Return user data (excluding sensitive info)
+    // Generate new JWT token for signin
+    const token = generateToken(user._id);
+
+    // Return user data with token (same structure as signup)
     const userResponse = {
       id: user._id,
       firebaseUserId: user.firebaseUserId,
@@ -141,8 +151,10 @@ export const getUserByFirebaseId = async (req, res) => {
       email: user.email,
       phoneNumber: user.phoneNumber,
       role: user.role,
+      status: user.status,
       createdAt: user.createdAt,
-      updatedAt: user.updatedAt
+      updatedAt: user.updatedAt,
+      token // Include JWT token in response
     };
 
     res.status(200).json({
@@ -158,7 +170,6 @@ export const getUserByFirebaseId = async (req, res) => {
     });
   }
 };
-
 
 
 
@@ -250,49 +261,48 @@ export const updateUser = async (req, res) => {
 
 
 
-
 /**
  * @desc    Delete ALL users from the database (DANGER ZONE)
  * @route   DELETE /api/users/delete-all
  * @access  Private/Admin only (should be protected)
  */
-export const deleteAllUsers = async (req, res) => {
+export const deleteAllUsers = async () => {
   try {
     // Count users before deletion
     const userCount = await User.countDocuments();
     
     if (userCount === 0) {
-      return res.status(404).json({
+      console.log('No users found to delete');
+      return {
         success: false,
         message: 'No users found to delete'
-      });
+      };
     }
 
     // Delete all users
     const result = await User.deleteMany({});
 
-    res.status(200).json({
+    const response = {
       success: true,
       message: `Successfully deleted ${result.deletedCount} users from the database`,
       data: {
         deletedCount: result.deletedCount,
         totalUsersBefore: userCount
       }
-    });
+    };
+
+    console.log(response.message);
+    return response;
 
   } catch (error) {
     console.error('Delete All Users Error:', error);
-    res.status(500).json({
+    return {
       success: false,
       message: 'Server error deleting users',
       error: error.message
-    });
+    };
   }
 };
-
-
-
-
 
 
 
@@ -303,7 +313,7 @@ export const deleteAllUsers = async (req, res) => {
  * @route   GET /api/users/print-all
  * @access  Private/Admin only
  */
-export const printAllUsers = async (req, res) => {
+export const printAllUsers = async () => {
   try {
     const users = await User.find({}).lean();
     
@@ -311,31 +321,35 @@ export const printAllUsers = async (req, res) => {
     console.log(`Total users: ${users.length}`);
     console.log('===============================\n');
     
-    users.forEach((user, index) => {
-      console.log(`----- User ${index + 1} -----`);
-      console.log(`ID: ${user._id}`);
-      console.log(`Firebase UID: ${user.firebaseUserId}`);
-      console.log(`Full Name: ${user.fullName}`);
-      console.log(`Email: ${user.email}`);
-      console.log(`Phone: ${user.phoneNumber}`);
-      console.log(`Role: ${user.role}`);
-      console.log(`Status: ${user.status}`);
-      console.log(`Created: ${user.createdAt}`);
-      console.log(`Updated: ${user.updatedAt}`);
-      console.log('------------------------\n');
-    });
+    if (users.length === 0) {
+      console.log('No users found in database');
+    } else {
+      users.forEach((user, index) => {
+        console.log(`----- User ${index + 1} -----`);
+        console.log(`ID: ${user._id}`);
+        console.log(`Firebase UID: ${user.firebaseUserId}`);
+        console.log(`Full Name: ${user.fullName}`);
+        console.log(`Email: ${user.email}`);
+        console.log(`Phone: ${user.phoneNumber}`);
+        console.log(`Role: ${user.role}`);
+        console.log(`Status: ${user.status}`);
+        console.log(`Created: ${user.createdAt}`);
+        console.log(`Updated: ${user.updatedAt}`);
+        console.log('------------------------\n');
+      });
+    }
 
-    res.status(200).json({
+    return {
       success: true,
       message: `Printed ${users.length} users to console`,
       count: users.length
-    });
+    };
 
   } catch (error) {
     console.error('Print Users Error:', error);
-    res.status(500).json({
+    return {
       success: false,
       message: 'Server error printing users'
-    });
+    };
   }
 };
