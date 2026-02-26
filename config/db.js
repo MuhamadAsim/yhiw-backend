@@ -13,4 +13,7 @@ const connectDB = async () => {
   }
 };
 
+
+//MONGO_URI=mongodb+srv://Kiosk:kiosk@cluster0.kacqumb.mongodb.net/Outfit?retryWrites=true&w=majority&appName=Cluster0/yhiw
+
 export default connectDB;
