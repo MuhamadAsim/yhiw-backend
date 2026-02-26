@@ -1,4 +1,5 @@
 import { mockProviders } from '../data/providers.ts';
+import User from '../models/userModel.js';
 
 // Store active bookings (in production, use database)
 const activeBookings = new Map();
