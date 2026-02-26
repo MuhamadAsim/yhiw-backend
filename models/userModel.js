@@ -25,13 +25,14 @@ const userSchema = new mongoose.Schema({
   // For role-based access (customer, service-provider, admin)
   role: {
     type: String,
-    enum: ['customer', 'service-provider', 'admin'],
+    enum: ['customer', 'provider'],
     default: 'customer'
   },
+  profileImage: String,
   // Account status
   status: {
     type: String,
-    enum: ['active', 'inactive', 'suspended'],
+    enum: ['active', 'inactive'],
     default: 'active'
   },
   // Timestamps

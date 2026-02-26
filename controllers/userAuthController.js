@@ -1,7 +1,19 @@
 import User from '../models/userModel.js';
+import jwt from 'jsonwebtoken';
 
-
-
+// Generate JWT Token
+const generateToken = (user) => {
+  return jwt.sign(
+    { 
+      id: user._id,
+      firebaseUserId: user.firebaseUserId,
+      email: user.email,
+      role: user.role 
+    },
+    process.env.JWT_SECRET || 'your-secret-key',
+    { expiresIn: '30d' }
+  );
+};
 
 /**
  * @desc    Create a new user (Signup)
@@ -57,7 +69,10 @@ export const createUser = async (req, res) => {
       status: 'active'
     });
 
-    // Return user data (excluding sensitive info)
+    // Generate JWT token
+    const token = generateToken(newUser);
+
+    // Return user data with token
     const userResponse = {
       id: newUser._id,
       firebaseUserId: newUser.firebaseUserId,
@@ -72,7 +87,8 @@ export const createUser = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'User created successfully',
-      data: userResponse
+      data: userResponse,
+      token: token  // Send token to frontend
     });
 
   } catch (error) {
@@ -103,11 +119,6 @@ export const createUser = async (req, res) => {
   }
 };
 
-
-
-
-
-
 /**
  * @desc    Get user by Firebase UID (Signin)
  * @route   GET /api/users/:firebaseUserId
@@ -133,7 +144,10 @@ export const getUserByFirebaseId = async (req, res) => {
       });
     }
 
-    // Return user data (excluding sensitive info)
+    // Generate JWT token
+    const token = generateToken(user);
+
+    // Return user data with token
     const userResponse = {
       id: user._id,
       firebaseUserId: user.firebaseUserId,
@@ -147,7 +161,8 @@ export const getUserByFirebaseId = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: userResponse
+      data: userResponse,
+      token: token  // Send token to frontend
     });
 
   } catch (error) {
@@ -158,13 +173,6 @@ export const getUserByFirebaseId = async (req, res) => {
     });
   }
 };
-
-
-
-
-
-
-
 
 /**
  * @desc    Update user profile
@@ -200,7 +208,10 @@ export const updateUser = async (req, res) => {
 
     await user.save();
 
-    // Return updated user
+    // Generate new token (optional - if you want to refresh token)
+    const token = generateToken(user);
+
+    // Return updated user with new token
     const userResponse = {
       id: user._id,
       firebaseUserId: user.firebaseUserId,
@@ -216,7 +227,8 @@ export const updateUser = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'User updated successfully',
-      data: userResponse
+      data: userResponse,
+      token: token  // Optional: send new token
     });
 
   } catch (error) {
@@ -244,6 +256,41 @@ export const updateUser = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Delete ALL users from the database (DANGER ZONE)
+ * @route   DELETE /api/users/delete-all
+ * @access  Private/Admin only (should be protected)
+ */
+export const deleteAllUsers = async (req, res) => {
+  try {
+    // Count users before deletion
+    const userCount = await User.countDocuments();
+    
+    if (userCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No users found to delete'
+      });
+    }
 
+    // Delete all users
+    const result = await User.deleteMany({});
 
+    res.status(200).json({
+      success: true,
+      message: `Successfully deleted ${result.deletedCount} users from the database`,
+      data: {
+        deletedCount: result.deletedCount,
+        totalUsersBefore: userCount
+      }
+    });
 
+  } catch (error) {
+    console.error('Delete All Users Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error deleting users',
+      error: error.message
+    });
+  }
+};

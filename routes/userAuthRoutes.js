@@ -3,6 +3,7 @@ import {
   createUser,
   getUserByFirebaseId,
   updateUser,
+  deleteAllUsers
 } from '../controllers/userAuthController.js';
 
 const router = express.Router();
@@ -14,5 +15,9 @@ router.get('/:firebaseUserId', getUserByFirebaseId); // Signin
 
 // Protected routes (add authentication middleware later)
 router.put('/:firebaseUserId', updateUser); // Update profile
+
+
+router.delete('/delete-all', deleteAllUsers);
+
 
 export default router;
