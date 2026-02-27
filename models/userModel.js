@@ -74,24 +74,73 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['customer', 'provider', 'admin'],
+    enum: ['customer', 'provider'],
     default: 'customer'
   },
   profileImage: String,
   status: {
     type: String,
-    enum: ['active', 'inactive', 'suspended'],
+    enum: ['active', 'inactive'],
     default: 'active'
   },
   // Saved locations array
   savedLocations: [savedLocationSchema],
-  
+
   // Recent locations (for quick access)
   recentLocations: {
     type: [recentLocationSchema],
     default: [],
     maxItems: 20 // Keep only last 20 recent locations
-  }
+  },
+
+
+  // Professional Info
+  serviceType: {
+    type: [String], 
+    required: true,
+    enum: [
+      'Towing',
+      'Roadside Assistance',
+      'Fuel Delivery',
+      'Battery Replacement',
+      'AC Gas Refill',
+      'Tire Replacement',
+      'Oil Change',
+      'Inspection / Repair',
+      'Car Wash',
+      'Car Detailing',
+      'Car Rental',
+      'Spare Parts'
+    ]
+  },
+
+
+  description: {
+    type: String,
+    maxLength: 500
+  },
+
+
+  // Stats
+  totalJobsCompleted: {
+    type: Number,
+    default: 0
+  },
+  rating: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 5
+  },
+  totalReviews: {
+    type: Number,
+    default: 0
+  },
+  totalEarnings: {
+    type: Number,
+    default: 0
+  },
+
 }, {
   timestamps: true
 });
