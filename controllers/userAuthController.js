@@ -1,5 +1,8 @@
 import User from '../models/userModel.js';
 import jwt from 'jsonwebtoken';
+import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
+import Job from '../models/jobModel.js';
+
 
 
 
@@ -306,50 +309,215 @@ export const deleteAllUsers = async () => {
 
 
 
-
-
 /**
- * @desc    Print all users to console (for debugging)
+ * @desc    Print all users to console with location and online status (for debugging)
  * @route   GET /api/users/print-all
  * @access  Private/Admin only
  */
 export const printAllUsers = async () => {
   try {
+    // Get all users
     const users = await User.find({}).lean();
     
-    console.log('\n========== ALL USERS ==========');
+    // Get all provider live statuses
+    const providerStatuses = await ProviderLiveStatus.find({}).lean();
+    
+    // Create a map for quick lookup
+    const statusMap = {};
+    providerStatuses.forEach(status => {
+      statusMap[status.providerId.toString()] = status;
+    });
+    
+    console.log('\n========== ALL USERS WITH LOCATION & STATUS ==========');
     console.log(`Total users: ${users.length}`);
-    console.log('===============================\n');
+    console.log('=====================================================\n');
     
     if (users.length === 0) {
       console.log('No users found in database');
     } else {
       users.forEach((user, index) => {
-        console.log(`----- User ${index + 1} -----`);
-        console.log(`ID: ${user._id}`);
-        console.log(`Firebase UID: ${user.firebaseUserId}`);
-        console.log(`Full Name: ${user.fullName}`);
-        console.log(`Email: ${user.email}`);
-        console.log(`Phone: ${user.phoneNumber}`);
-        console.log(`Role: ${user.role}`);
-        console.log(`Status: ${user.status}`);
-        console.log(`Created: ${user.createdAt}`);
-        console.log(`Updated: ${user.updatedAt}`);
-        console.log('------------------------\n');
+        const providerStatus = statusMap[user._id.toString()];
+        const isProvider = user.role === 'provider';
+        
+        console.log(`========== User ${index + 1} ==========`);
+        console.log(`🔑 ID: ${user._id}`);
+        console.log(`🔥 Firebase UID: ${user.firebaseUserId}`);
+        console.log(`👤 Full Name: ${user.fullName}`);
+        console.log(`📧 Email: ${user.email}`);
+        console.log(`📱 Phone: ${user.phoneNumber}`);
+        console.log(`🎭 Role: ${user.role}`);
+        console.log(`✅ Status: ${user.status}`);
+        
+        // Provider-specific info
+        if (isProvider) {
+          console.log(`\n--- PROVIDER INFO ---`);
+          console.log(`🔧 Service Type: ${user.serviceType?.join(', ') || 'Not specified'}`);
+          console.log(`📝 Description: ${user.description || 'No description'}`);
+          console.log(`⭐ Rating: ${user.rating || 0} (${user.totalReviews || 0} reviews)`);
+          console.log(`💰 Total Earnings: ${user.totalEarnings || 0} BHD`);
+          console.log(`📊 Jobs Completed: ${user.totalJobsCompleted || 0}`);
+          
+          console.log(`\n📍 LIVE STATUS:`);
+          if (providerStatus) {
+            // Calculate if provider is actually online based on lastSeen
+            const now = new Date();
+            const lastSeen = new Date(providerStatus.lastSeen);
+            const timeDiffInSeconds = Math.floor((now - lastSeen) / 1000);
+            const isActuallyOnline = providerStatus.isOnline && timeDiffInSeconds <= 90; // 1.5 minutes = 90 seconds
+            
+            console.log(`   🟢 DB Online Flag: ${providerStatus.isOnline ? 'YES' : 'NO'}`);
+            console.log(`   🟢 Actually Online: ${isActuallyOnline ? 'YES' : 'NO'} (based on lastSeen)`);
+            console.log(`   🟢 Available: ${providerStatus.isAvailable ? 'YES' : 'NO'}`);
+            console.log(`   🕒 Last Seen: ${providerStatus.lastSeen}`);
+            console.log(`   ⏱️ Time since last update: ${timeDiffInSeconds} seconds`);
+            
+            if (timeDiffInSeconds > 90) {
+              console.log(`   ⚠️ WARNING: Provider marked online but last update was ${Math.floor(timeDiffInSeconds / 60)} minutes ${timeDiffInSeconds % 60} seconds ago!`);
+            }
+            
+            // FIXED: Check for currentLocation and its coordinates properly
+            if (providerStatus.currentLocation && 
+                providerStatus.currentLocation.coordinates && 
+                providerStatus.currentLocation.coordinates.length === 2) {
+              
+              const [lng, lat] = providerStatus.currentLocation.coordinates;
+              console.log(`   📌 Location:`);
+              console.log(`      • Latitude: ${lat.toFixed(6)}`);
+              console.log(`      • Longitude: ${lng.toFixed(6)}`);
+              console.log(`      • Google Maps: https://www.google.com/maps?q=${lat},${lng}`);
+              
+              // Also show if it's manual or auto location (you'd need to add this field to your schema)
+              // console.log(`      • Location Mode: ${providerStatus.locationMode || 'auto'}`);
+              
+              // Calculate how old the location is
+              if (providerStatus.updatedAt) {
+                const locationAge = Math.floor((now - new Date(providerStatus.updatedAt)) / 1000);
+                console.log(`      • Location age: ${locationAge} seconds ago`);
+                
+                // Try to get the actual location update time from the location data
+                // This assumes you're sending timestamp in the location update
+                if (providerStatus.currentLocation.timestamp) {
+                  const locationTimestamp = new Date(providerStatus.currentLocation.timestamp);
+                  const locationAgeFromData = Math.floor((now - locationTimestamp) / 1000);
+                  console.log(`      • Location data age: ${locationAgeFromData} seconds ago (from client)`);
+                }
+              }
+            } else {
+              console.log(`   📌 Location: Not set`);
+            }
+            
+            if (providerStatus.currentTaskId) {
+              console.log(`   🔄 Current Task: ${providerStatus.currentTaskId}`);
+            }
+          } else {
+            console.log(`   📍 No live status record found`);
+            console.log(`   🟢 Online: NO (never went online)`);
+          }
+        } else {
+          // Customer info
+          console.log(`\n--- CUSTOMER INFO ---`);
+          console.log(`📍 Saved Locations: ${user.savedLocations?.length || 0}`);
+          console.log(`🕒 Recent Locations: ${user.recentLocations?.length || 0}`);
+        }
+        
+        console.log(`📅 Created: ${user.createdAt}`);
+        console.log(`🔄 Updated: ${user.updatedAt}`);
+        console.log('=========================================\n');
       });
+      
+      // Print summary statistics with actual online status
+      console.log('\n========== SUMMARY STATISTICS ==========');
+      const providers = users.filter(u => u.role === 'provider');
+      const customers = users.filter(u => u.role === 'customer');
+      
+      // Calculate actual online status based on lastSeen
+      const now = new Date();
+      let actuallyOnlineCount = 0;
+      let staleOnlineCount = 0;
+      let providersWithLocation = 0;
+      
+      providerStatuses.forEach(status => {
+        if (status.currentLocation && 
+            status.currentLocation.coordinates && 
+            status.currentLocation.coordinates.length === 2) {
+          providersWithLocation++;
+        }
+        
+        if (status.isOnline) {
+          const lastSeen = new Date(status.lastSeen);
+          const timeDiffInSeconds = Math.floor((now - lastSeen) / 1000);
+          
+          if (timeDiffInSeconds <= 90) {
+            actuallyOnlineCount++;
+          } else {
+            staleOnlineCount++;
+          }
+        }
+      });
+      
+      const onlineProviders = providerStatuses.filter(s => s.isOnline).length;
+      
+      console.log(`Total Providers: ${providers.length}`);
+      console.log(`Total Customers: ${customers.length}`);
+      console.log(`Providers marked Online in DB: ${onlineProviders}`);
+      console.log(`📱 Actually Online (last 90 sec): ${actuallyOnlineCount}`);
+      console.log(`⚠️ Stale Online (>90 sec ago): ${staleOnlineCount}`);
+      console.log(`📍 Providers with Location: ${providersWithLocation}`);
+      
+      // List providers with location
+      if (providersWithLocation > 0) {
+        console.log('\n--- PROVIDERS WITH LOCATION ---');
+        providerStatuses.forEach(status => {
+          if (status.currentLocation && 
+              status.currentLocation.coordinates && 
+              status.currentLocation.coordinates.length === 2) {
+            const provider = users.find(u => u._id.toString() === status.providerId.toString());
+            const [lng, lat] = status.currentLocation.coordinates;
+            console.log(`• ${provider?.fullName || 'Unknown'}: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+          }
+        });
+      }
+      
+      // List stale providers
+      if (staleOnlineCount > 0) {
+        console.log('\n--- STALE PROVIDERS (marked online but no recent update) ---');
+        providerStatuses.forEach(status => {
+          if (status.isOnline) {
+            const lastSeen = new Date(status.lastSeen);
+            const timeDiffInSeconds = Math.floor((now - lastSeen) / 1000);
+            
+            if (timeDiffInSeconds > 90) {
+              const provider = users.find(u => u._id.toString() === status.providerId.toString());
+              console.log(`• ${provider?.fullName || 'Unknown'}: ${Math.floor(timeDiffInSeconds / 60)}m ${timeDiffInSeconds % 60}s ago`);
+            }
+          }
+        });
+      }
+      
+      console.log('=========================================\n');
     }
 
     return {
       success: true,
       message: `Printed ${users.length} users to console`,
-      count: users.length
+      count: users.length,
+      stats: {
+        totalUsers: users.length,
+        providers: users.filter(u => u.role === 'provider').length,
+        customers: users.filter(u => u.role === 'customer').length,
+        onlineProviders: onlineProviders,
+        actuallyOnline: actuallyOnlineCount,
+        staleOnline: staleOnlineCount,
+        providersWithLocation: providersWithLocation
+      }
     };
 
   } catch (error) {
     console.error('Print Users Error:', error);
     return {
       success: false,
-      message: 'Server error printing users'
+      message: 'Server error printing users',
+      error: error.message
     };
   }
 };

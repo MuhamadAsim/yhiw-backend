@@ -3,7 +3,6 @@ import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
 import User from '../models/userModel.js';
 import Job from '../models/jobModel.js';
 
-
 // ==================== LOCATION & STATUS CONTROLLERS ====================
 
 // Update provider online status
@@ -66,6 +65,14 @@ export const updateProviderLocation = async (req, res) => {
     const { providerId } = req.params;
     const { latitude, longitude, address, isManual, timestamp } = req.body;
 
+    console.log(`📍 Location update received for provider ${providerId}:`, {
+      latitude,
+      longitude,
+      address,
+      isManual: isManual ? 'MANUAL' : 'AUTO',
+      timestamp
+    });
+
     // Find provider by firebaseUserId
     const provider = await User.findOne({ 
       firebaseUserId: providerId,
@@ -73,6 +80,7 @@ export const updateProviderLocation = async (req, res) => {
     });
 
     if (!provider) {
+      console.error('❌ Provider not found:', providerId);
       return res.status(404).json({
         success: false,
         message: 'Provider not found'
@@ -83,23 +91,64 @@ export const updateProviderLocation = async (req, res) => {
     let liveStatus = await ProviderLiveStatus.findOne({ providerId: provider._id });
 
     if (!liveStatus) {
+      console.log('📝 Creating new live status record for provider:', provider._id);
       liveStatus = new ProviderLiveStatus({
         providerId: provider._id,
         currentLocation: {
           type: 'Point',
-          coordinates: [longitude, latitude] // MongoDB expects [longitude, latitude]
+          coordinates: [longitude, latitude], // MongoDB expects [longitude, latitude]
+          isManual: isManual || false,
+          address: address || '',
+          lastUpdated: new Date()
         },
-        lastSeen: new Date()
+        lastSeen: new Date(),
+        isOnline: true
       });
     } else {
+      // IMPORTANT: Check if existing location is manual and new update is NOT manual
+      const existingIsManual = liveStatus.currentLocation?.isManual || false;
+      
+      console.log(`🔄 Existing location mode: ${existingIsManual ? 'MANUAL' : 'AUTO'}`);
+      console.log(`🔄 New update mode: ${isManual ? 'MANUAL' : 'AUTO'}`);
+
+      if (existingIsManual && !isManual) {
+        // This is an auto update trying to override a manual location - PRESERVE MANUAL LOCATION
+        console.log('✅ Preserving manual location, ignoring auto update');
+        
+        // Still update lastSeen to show provider is active
+        liveStatus.lastSeen = new Date();
+        await liveStatus.save();
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Manual location preserved',
+          data: {
+            location: {
+              latitude: liveStatus.currentLocation.coordinates[1],
+              longitude: liveStatus.currentLocation.coordinates[0],
+              address: liveStatus.currentLocation.address,
+              isManual: true
+            },
+            lastSeen: liveStatus.lastSeen
+          }
+        });
+      }
+
+      // Update location (either manual update OR auto update when no manual location exists)
+      console.log(`📌 Updating location to ${isManual ? 'MANUAL' : 'AUTO'} mode`);
+      
       liveStatus.currentLocation = {
         type: 'Point',
-        coordinates: [longitude, latitude]
+        coordinates: [longitude, latitude],
+        isManual: isManual || false,
+        address: address || liveStatus.currentLocation?.address || '',
+        lastUpdated: new Date()
       };
       liveStatus.lastSeen = new Date();
     }
 
     await liveStatus.save();
+    console.log('✅ Location updated successfully');
 
     res.status(200).json({
       success: true,
@@ -108,14 +157,15 @@ export const updateProviderLocation = async (req, res) => {
           latitude,
           longitude,
           address,
-          isManual,
+          isManual: isManual || false,
           timestamp
-        }
+        },
+        lastSeen: liveStatus.lastSeen
       }
     });
 
   } catch (error) {
-    console.error('Error updating provider location:', error);
+    console.error('❌ Error updating provider location:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update provider location',
@@ -155,16 +205,26 @@ export const getProviderStatus = async (req, res) => {
       });
     }
 
+    // Calculate if provider is actually online based on lastSeen
+    const now = new Date();
+    const lastSeen = new Date(liveStatus.lastSeen);
+    const timeDiffInSeconds = Math.floor((now - lastSeen) / 1000);
+    const isActuallyOnline = liveStatus.isOnline && timeDiffInSeconds <= 90;
+
     res.status(200).json({
       success: true,
       data: {
         isOnline: liveStatus.isOnline,
+        isActuallyOnline,
         isAvailable: liveStatus.isAvailable,
         location: liveStatus.currentLocation ? {
           latitude: liveStatus.currentLocation.coordinates[1],
-          longitude: liveStatus.currentLocation.coordinates[0]
+          longitude: liveStatus.currentLocation.coordinates[0],
+          address: liveStatus.currentLocation.address || '',
+          isManual: liveStatus.currentLocation.isManual || false
         } : null,
         lastSeen: liveStatus.lastSeen,
+        timeSinceLastUpdate: timeDiffInSeconds,
         currentTaskId: liveStatus.currentTaskId
       }
     });
@@ -191,9 +251,13 @@ export const getNearbyProviders = async (req, res) => {
       });
     }
 
+    // Only get providers who are online AND have recent activity (last 90 seconds)
+    const ninetySecondsAgo = new Date(Date.now() - 90 * 1000);
+
     const providers = await ProviderLiveStatus.find({
       isOnline: true,
       isAvailable: true,
+      lastSeen: { $gte: ninetySecondsAgo },
       currentLocation: {
         $near: {
           $geometry: {
@@ -223,9 +287,12 @@ export const getNearbyProviders = async (req, res) => {
         profileImage: providerData.profileImage || null,
         location: {
           latitude: provider.currentLocation.coordinates[1],
-          longitude: provider.currentLocation.coordinates[0]
+          longitude: provider.currentLocation.coordinates[0],
+          address: provider.currentLocation.address || '',
+          isManual: provider.currentLocation.isManual || false
         },
-        distance: distance // in km
+        distance: distance, // in km
+        lastSeen: provider.lastSeen
       };
     });
 
@@ -311,8 +378,6 @@ export const getProviderPerformance = async (req, res) => {
       });
     }
 
-    // For now, return lifetime stats
-    // When you create Job model, you can add period-based filtering (today/week/month)
     res.status(200).json({
       success: true,
       data: {
@@ -333,34 +398,6 @@ export const getProviderPerformance = async (req, res) => {
     });
   }
 };
-
-// ==================== HELPER FUNCTIONS ====================
-
-// Calculate distance between two coordinates in kilometers (Haversine formula)
-function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Earth's radius in km
-  const dLat = deg2rad(lat2 - lat1);
-  const dLon = deg2rad(lon2 - lon1);
-  
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  const distance = R * c;
-  
-  return Math.round(distance * 10) / 10; // Round to 1 decimal place
-}
-
-function deg2rad(deg) {
-  return deg * (Math.PI/180);
-}
-
-
-
-
-
 
 // Enhanced performance controller using Job model
 export const getProviderPerformanceWithJobs = async (req, res) => {
@@ -440,3 +477,26 @@ export const getProviderPerformanceWithJobs = async (req, res) => {
     });
   }
 };
+
+// ==================== HELPER FUNCTIONS ====================
+
+// Calculate distance between two coordinates in kilometers (Haversine formula)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in km
+  const dLat = deg2rad(lat2 - lat1);
+  const dLon = deg2rad(lon2 - lon1);
+  
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c;
+  
+  return Math.round(distance * 10) / 10; // Round to 1 decimal place
+}
+
+function deg2rad(deg) {
+  return deg * (Math.PI/180);
+}

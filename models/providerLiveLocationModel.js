@@ -28,6 +28,18 @@ const providerLiveStatusSchema = new mongoose.Schema({
     coordinates: {
       type: [Number], // [longitude, latitude]
       index: '2dsphere'
+    },
+    isManual: {
+      type: Boolean,
+      default: false
+    },
+    address: {
+      type: String,
+      default: ''
+    },
+    lastUpdated: {
+      type: Date,
+      default: Date.now
     }
   },
 
@@ -44,6 +56,7 @@ const providerLiveStatusSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
+// Create 2dsphere index for geospatial queries
 providerLiveStatusSchema.index({ currentLocation: '2dsphere' });
 
 const ProviderLiveStatus = mongoose.model('ProviderLiveStatus', providerLiveStatusSchema);
