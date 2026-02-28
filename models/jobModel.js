@@ -167,21 +167,41 @@ const jobSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Generate unique job number before saving - FIXED VERSION
+// models/jobModel.js - Replace your pre-save hook with this
+
+// Generate unique job number before saving
 jobSchema.pre('save', function(next) {
-  // Remove 'async' - we don't need it here
-  try {
-    if (!this.jobNumber) {
+  // Use regular function, not arrow, to have access to 'this'
+  console.log('🔄 Pre-save hook triggered');
+  
+  // Only generate if jobNumber doesn't exist
+  if (!this.jobNumber) {
+    try {
       const date = new Date();
       const year = date.getFullYear().toString().slice(-2);
       const month = (date.getMonth() + 1).toString().padStart(2, '0');
       const day = date.getDate().toString().padStart(2, '0');
       const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
       this.jobNumber = `JOB-${year}${month}${day}-${random}`;
+      console.log('✅ Generated job number:', this.jobNumber);
+    } catch (error) {
+      console.error('❌ Error generating job number:', error);
+      return next(error); // Make sure to return here
     }
-    next(); // Call next() when done
-  } catch (error) {
-    next(error); // Pass any errors to mongoose
+  }
+  
+  // IMPORTANT: Make sure next is called exactly once
+  console.log('✅ Pre-save hook complete, calling next()');
+  return next(); // Add return to be safe
+});
+
+// Add error handler for post-save
+jobSchema.post('save', function(error, doc, next) {
+  if (error) {
+    console.error('❌ Post-save error:', error);
+    next(error);
+  } else {
+    next();
   }
 });
 
