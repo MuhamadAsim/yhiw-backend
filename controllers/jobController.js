@@ -348,7 +348,6 @@ const generateJobNumber = () => {
   const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
   return `JOB-${year}${month}${day}-${random}`;
 };
-
 // Controller to handle customer finding a provider
 export const findProvider = async (req, res) => {
   try {
@@ -396,7 +395,6 @@ export const findProvider = async (req, res) => {
     // Create the job in database with 'pending' status
     const job = new Job({
       jobNumber,
-      // providerId is omitted - will be set when provider accepts
       customerId,
       
       title: serviceName,
@@ -441,7 +439,7 @@ export const findProvider = async (req, res) => {
     await job.save();
     console.log('✅ Job saved successfully with ID:', job._id);
 
-    // Find nearby active providers
+    // Find nearby active providers - FIXED VERSION
     const searchRadii = [3, 5, 7]; // km
     let eligibleProviders = [];
 
@@ -450,16 +448,9 @@ export const findProvider = async (req, res) => {
       for (const radius of searchRadii) {
         if (eligibleProviders.length > 0) break;
 
+        console.log(`Searching for providers within ${radius}km...`);
+        
         const providers = await ProviderLiveStatus.aggregate([
-          {
-            $match: {
-              isOnline: true,
-              isAvailable: true,
-              currentTaskId: null,
-              lastSeen: { $gte: new Date(Date.now() - 90 * 1000) }, // Last 1.5 minutes
-              'currentLocation.coordinates': { $exists: true, $ne: [] }
-            }
-          },
           {
             $geoNear: {
               near: {
@@ -469,7 +460,12 @@ export const findProvider = async (req, res) => {
               distanceField: 'distance',
               maxDistance: radius * 1000,
               spherical: true,
-              key: 'currentLocation'
+              query: {
+                isOnline: true,
+                isAvailable: true,
+                currentTaskId: null,
+                lastSeen: { $gte: new Date(Date.now() - 90 * 1000) }
+              }
             }
           },
           {
@@ -478,6 +474,12 @@ export const findProvider = async (req, res) => {
               localField: 'providerId',
               foreignField: '_id',
               as: 'userInfo'
+            }
+          },
+          {
+            $unwind: {
+              path: '$userInfo',
+              preserveNullAndEmptyArrays: false
             }
           },
           {
@@ -504,11 +506,12 @@ export const findProvider = async (req, res) => {
           }
         ]);
 
+        console.log(`Found ${providers.length} providers within ${radius}km`);
         eligibleProviders = providers;
       }
     }
 
-    console.log(`Found ${eligibleProviders.length} eligible providers`);
+    console.log(`Total eligible providers found: ${eligibleProviders.length}`);
 
     // Create notifications for all eligible providers
     if (eligibleProviders.length > 0) {
@@ -534,7 +537,6 @@ export const findProvider = async (req, res) => {
         return notification.save();
       });
 
-      // Wait for all notifications to be created
       await Promise.allSettled(notificationPromises);
       console.log(`✅ Created ${eligibleProviders.length} notifications`);
     }
@@ -554,14 +556,11 @@ export const findProvider = async (req, res) => {
     console.error('❌ Error in findProvider:', error);
     console.error('Error stack:', error.stack);
     
-    // Check for validation errors
     if (error.name === 'ValidationError') {
       const validationErrors = {};
       Object.keys(error.errors).forEach(key => {
         validationErrors[key] = error.errors[key].message;
       });
-      console.error('Validation errors:', validationErrors);
-      
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -569,7 +568,6 @@ export const findProvider = async (req, res) => {
       });
     }
 
-    // Check for duplicate key error
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
