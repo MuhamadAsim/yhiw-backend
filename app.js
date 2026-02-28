@@ -1,6 +1,9 @@
+// app.js
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
+import { createServer } from 'http';
+import WebSocketManager from './websocket/server.js';
 
 const app = express();
 
@@ -10,34 +13,37 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
 
+// Create HTTP server
+const server = createServer(app);
 
+// Initialize WebSocket manager
+const wsManager = new WebSocketManager(server);
 
+// Make wsManager available to routes
+app.set('wsManager', wsManager);
 
 import userAuthRoutes from "./routes/userAuthRoutes.js";
 import customerRoutes from "./routes/customerRoutes.js";
 import providerRoutes from "./routes/providerRoutes.js";
 import jobRoutes from "./routes/jobRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
-
-
-
-
-
-
-
-
+import websocketRoutes from "./routes/websocketRoutes.js";
 
 app.use("/api/users", userAuthRoutes);
-app.use("/api/customer",customerRoutes)
+app.use("/api/customer", customerRoutes);
 app.use("/api/provider", providerRoutes);
-app.use("/api/jobs",jobRoutes);
+app.use("/api/jobs", jobRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/ws", websocketRoutes); // For WebSocket status endpoints
 
-
-
-
-
-
+// WebSocket health check endpoint
+app.get("/api/ws/stats", (req, res) => {
+  const wsManager = req.app.get('wsManager');
+  res.json({
+    success: true,
+    data: wsManager.getStats()
+  });
+});
 
 /* -------------------- Health Check -------------------- */
 app.get("/health", (req, res) => {
@@ -69,4 +75,5 @@ app.use((err, req, res, next) => {
   });
 });
 
+export { server, wsManager };
 export default app;

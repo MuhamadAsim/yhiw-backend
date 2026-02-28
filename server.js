@@ -1,8 +1,8 @@
+// server.js
 import dotenv from "dotenv";
-import app from "./app.js";
+import { server } from "./app.js";
 import connectDB from "./config/db.js";
-import { deleteAllUsers, printAllUsers } from "./controllers/userAuthController.js";
-
+import { printAllUsers } from "./controllers/userAuthController.js";
 
 dotenv.config();
 
@@ -11,15 +11,11 @@ const PORT = process.env.PORT || 5000;
 /* -------------------- Start Server -------------------- */
 const startServer = async () => {
   await connectDB();
-      // ⚠️ This will run automatically on server start
-    await printAllUsers(); 
-    
-    // 🚨 EXTREMELY DANGEROUS
-    // await deleteAllUsers();  
+  await printAllUsers(); // Optional
 
-
-  const server = app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  server.listen(PORT, () => {
+    console.log(`🚀 HTTP Server running on http://localhost:${PORT}`);
+    console.log(`🔌 WebSocket Server running on ws://localhost:${PORT}`);
   });
 
   /* -------------------- Graceful Shutdown -------------------- */
