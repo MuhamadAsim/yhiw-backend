@@ -5,15 +5,16 @@ import {
   getProviderJobHistory,
   getJobDetails,
   updateJobStatus,
-  acceptJob,
   getTodaysJobs,
+  checkJobStatus,
+  getJobDetailsForProvider,
+  acceptJob,
   
   // Customer endpoints
-  createJob,
-  getCustomerJobs,
-  submitJobReview,
-  cancelJob
+  findProvider
 } from '../controllers/jobController.js';
+import { authenticateToken } from '../middleware/auth.js';
+
 
 const router = express.Router();
 
@@ -28,29 +29,29 @@ router.get('/provider/:providerId/history', getProviderJobHistory);
 // Get provider's today's jobs with stats
 router.get('/provider/:providerId/today', getTodaysJobs);
 
-// Accept a job
-router.put('/:jobId/accept', acceptJob);
 
 // Update job status
 router.put('/:jobId/status', updateJobStatus);
 
 // ==================== CUSTOMER JOB ROUTES ====================
 
-// Create new job request
-router.post('/customer/:customerId/create', createJob);
 
-// Get customer's job history
-router.get('/customer/:customerId/history', getCustomerJobs);
 
-// Submit review for completed job
-router.post('/:jobId/review', submitJobReview);
 
-// Cancel job (by customer)
-router.put('/:jobId/cancel', cancelJob);
 
 // ==================== COMMON JOB ROUTES ====================
 
 // Get single job details (accessible by both provider and customer)
 router.get('/:jobId', getJobDetails);
+
+
+// finding provider
+// Customer routes
+router.post('/customer/finding-provider', authenticateToken, findProvider);
+router.get('/customer/:jobId/status', authenticateToken, checkJobStatus);
+
+// Provider routes
+router.get('/provider/job/:jobId', authenticateToken, getJobDetailsForProvider);
+router.post('/provider/job/:jobId/accept', authenticateToken, acceptJob);
 
 export default router;

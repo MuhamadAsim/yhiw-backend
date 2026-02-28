@@ -27,7 +27,6 @@ router.use(authenticateToken);
  * @desc Create a new booking and start provider search
  * @access Private
  */
-router.post('/finding_provider', createBooking);
 
 /**
  * @route GET /api/bookings/:bookingId/status

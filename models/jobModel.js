@@ -116,7 +116,7 @@ const jobSchema = new mongoose.Schema({
   cancelledAt: Date,
   cancelledBy: {
     type: String,
-    enum: ['customer', 'provider', 'system']
+    enum: ['customer', 'provider']
   },
   cancellationReason: String,
 

@@ -1,5 +1,9 @@
 import Job from '../models/jobModel.js';
 import User from '../models/userModel.js';
+import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
+import mongoose from 'mongoose';
+import Notification from '../models/notificationModel.js'; // Add this import
+
 
 // ==================== PROVIDER JOB CONTROLLERS ====================
 
@@ -222,45 +226,9 @@ export const updateJobStatus = async (req, res) => {
   }
 };
 
-// Accept a job
-export const acceptJob = async (req, res) => {
-  try {
-    const { jobId } = req.params;
 
-    const job = await Job.findById(jobId);
 
-    if (!job) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
-    }
 
-    if (job.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Job is no longer available'
-      });
-    }
-
-    job.status = 'accepted';
-    job.acceptedAt = new Date();
-    await job.save();
-
-    res.status(200).json({
-      success: true,
-      data: job
-    });
-
-  } catch (error) {
-    console.error('Error accepting job:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to accept job',
-      error: error.message
-    });
-  }
-};
 
 // Get today's jobs for provider
 export const getTodaysJobs = async (req, res) => {
@@ -320,99 +288,6 @@ export const getTodaysJobs = async (req, res) => {
   }
 };
 
-// ==================== CUSTOMER JOB CONTROLLERS ====================
-
-// Create new job request
-export const createJob = async (req, res) => {
-  try {
-    const { customerId } = req.params;
-    const jobData = req.body;
-
-    const customer = await User.findOne({ 
-      firebaseUserId: customerId,
-      role: 'customer' 
-    });
-
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: 'Customer not found'
-      });
-    }
-
-    const job = new Job({
-      ...jobData,
-      customerId: customer._id,
-      requestedAt: new Date()
-    });
-
-    await job.save();
-
-    res.status(201).json({
-      success: true,
-      data: job
-    });
-
-  } catch (error) {
-    console.error('Error creating job:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create job',
-      error: error.message
-    });
-  }
-};
-
-// Get customer's job history
-export const getCustomerJobs = async (req, res) => {
-  try {
-    const { customerId } = req.params;
-    const { page = 1, limit = 10 } = req.query;
-
-    const customer = await User.findOne({ 
-      firebaseUserId: customerId,
-      role: 'customer' 
-    });
-
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: 'Customer not found'
-      });
-    }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const jobs = await Job.find({ customerId: customer._id })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .populate('providerId', 'fullName profileImage rating');
-
-    const total = await Job.countDocuments({ customerId: customer._id });
-
-    res.status(200).json({
-      success: true,
-      data: {
-        jobs,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total,
-          pages: Math.ceil(total / parseInt(limit))
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Error getting customer jobs:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get customer jobs',
-      error: error.message
-    });
-  }
-};
 
 // Submit review for a job
 export const submitJobReview = async (req, res) => {
@@ -459,13 +334,218 @@ export const submitJobReview = async (req, res) => {
   }
 };
 
-// Cancel job (by customer)
-export const cancelJob = async (req, res) => {
+
+
+
+
+
+
+// Controller to handle customer finding a provider
+export const findProvider = async (req, res) => {
+  try {
+    const {
+      pickup,
+      dropoff,
+      serviceId,
+      serviceName,
+      servicePrice,
+      serviceCategory,
+      serviceType,
+      isCarRental,
+      isFuelDelivery,
+      isSpareParts,
+      vehicle,
+      customer,
+      carRental,
+      fuelDelivery,
+      spareParts,
+      additionalDetails,
+      schedule,
+      payment,
+      locationSkipped
+    } = req.body;
+
+    // Get customer ID from authenticated user
+    const customerId = req.user._id;
+
+    // Generate unique job number
+    const date = new Date();
+    const year = date.getFullYear().toString().slice(-2);
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    const jobNumber = `JOB-${year}${month}${day}-${random}`;
+
+    // Create the job in database with 'pending' status
+    const job = new Job({
+      jobNumber,
+      providerId: null,
+      customerId,
+      
+      title: serviceName,
+      serviceType: serviceCategory,
+      description: additionalDetails?.description || '',
+      
+      price: payment?.totalAmount || servicePrice,
+      paymentMethod: payment?.paymentMethod || 'cash',
+      paymentStatus: 'pending',
+      
+      pickupLocation: {
+        latitude: pickup?.coordinates?.lat || 0,
+        longitude: pickup?.coordinates?.lng || 0,
+        address: pickup?.address || ''
+      },
+      dropoffLocation: dropoff?.address ? {
+        latitude: dropoff?.coordinates?.lat || 0,
+        longitude: dropoff?.coordinates?.lng || 0,
+        address: dropoff?.address || ''
+      } : undefined,
+      
+      status: 'pending',
+      requestedAt: new Date(),
+      
+      // Store additional metadata
+      metadata: {
+        vehicle,
+        customer,
+        serviceSpecific: {
+          carRental,
+          fuelDelivery,
+          spareParts
+        },
+        additionalDetails,
+        schedule,
+        locationSkipped,
+        serviceId
+      }
+    });
+
+    await job.save();
+
+    // Find nearby active providers
+    const searchRadii = [3, 5, 7]; // km
+    let eligibleProviders = [];
+
+    for (const radius of searchRadii) {
+      if (eligibleProviders.length > 0) break;
+
+      const providers = await ProviderLiveStatus.aggregate([
+        {
+          $match: {
+            isOnline: true,
+            isAvailable: true,
+            currentTaskId: null,
+            lastSeen: { $gte: new Date(Date.now() - 90 * 1000) }, // Last 1.5 minutes
+            'currentLocation.coordinates': { $exists: true, $ne: [] }
+          }
+        },
+        {
+          $geoNear: {
+            near: {
+              type: 'Point',
+              coordinates: [pickup?.coordinates?.lng || 0, pickup?.coordinates?.lat || 0]
+            },
+            distanceField: 'distance',
+            maxDistance: radius * 1000,
+            spherical: true,
+            key: 'currentLocation'
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'providerId',
+            foreignField: '_id',
+            as: 'userInfo'
+          }
+        },
+        {
+          $match: {
+            'userInfo.status': 'active',
+            'userInfo.role': 'provider',
+            'userInfo.serviceType': { $in: [serviceCategory] }
+          }
+        },
+        {
+          $project: {
+            providerId: 1,
+            distance: 1,
+            'userInfo.fullName': 1,
+            'userInfo.firebaseUserId': 1,
+            'userInfo.rating': 1,
+            'userInfo.totalJobsCompleted': 1,
+            'userInfo.profileImage': 1,
+            'currentLocation': 1
+          }
+        },
+        {
+          $sort: { distance: 1 }
+        }
+      ]);
+
+      eligibleProviders = providers;
+    }
+
+    // Create notifications for all eligible providers
+    const notificationPromises = eligibleProviders.map(async (provider) => {
+      const notification = new Notification({
+        userId: provider.providerId,
+        type: 'NEW_JOB_REQUEST',
+        title: 'New Service Request',
+        message: `${serviceName} - ${pickup?.address?.substring(0, 50)}...`,
+        data: {
+          jobId: job._id.toString(),
+          jobNumber: job.jobNumber,
+          serviceType: serviceCategory,
+          serviceName: serviceName,
+          price: payment?.totalAmount || servicePrice,
+          pickupAddress: pickup?.address,
+          distance: Math.round(provider.distance / 1000 * 10) / 10, // in km with 1 decimal
+          customerName: customer?.name || 'Customer',
+          timestamp: new Date().toISOString()
+        }
+      });
+      
+      return notification.save();
+    });
+
+    // Wait for all notifications to be created
+    await Promise.allSettled(notificationPromises);
+
+    // Return response to customer
+    return res.status(200).json({
+      success: true,
+      message: 'Searching for providers',
+      bookingId: job._id,
+      jobNumber: job.jobNumber,
+      status: job.status,
+      providersFound: eligibleProviders.length,
+      estimatedWaitTime: eligibleProviders.length > 0 ? '30-60 seconds' : '2-3 minutes'
+    });
+
+  } catch (error) {
+    console.error('Error in findProvider:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to process request',
+      error: error.message
+    });
+  }
+};
+
+
+
+
+
+// Controller for provider to get job details when they click notification
+export const getJobDetailsForProvider = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { reason } = req.body;
+    const providerId = req.user._id; // From auth middleware
 
-    const job = await Job.findById(jobId);
+    const job = await Job.findById(jobId)
+      .populate('customerId', 'fullName phoneNumber profileImage rating')
+      .lean();
 
     if (!job) {
       return res.status(404).json({
@@ -474,86 +554,242 @@ export const cancelJob = async (req, res) => {
       });
     }
 
-    if (!['pending', 'accepted'].includes(job.status)) {
+    // Check if job is still available (pending and not assigned)
+    if (job.status !== 'pending' || job.providerId) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot cancel job at this stage'
+        message: 'This job is no longer available',
+        status: job.status
       });
     }
 
-    job.status = 'cancelled';
-    job.cancelledAt = new Date();
-    job.cancelledBy = 'customer';
-    job.cancellationReason = reason || 'Cancelled by customer';
-    await job.save();
+    // Format response for provider
+    const jobDetails = {
+      jobId: job._id,
+      jobNumber: job.jobNumber,
+      serviceType: job.serviceType,
+      title: job.title,
+      description: job.description,
+      price: job.price,
+      paymentMethod: job.paymentMethod,
+      
+      // Customer info
+      customer: {
+        name: job.customerId?.fullName || 'Customer',
+        phone: job.customerId?.phoneNumber,
+        rating: job.customerId?.rating || 0,
+        profileImage: job.customerId?.profileImage,
+        totalJobs: job.customerId?.totalJobsCompleted || 0
+      },
+      
+      // Locations
+      pickupLocation: {
+        address: job.pickupLocation.address,
+        coordinates: {
+          lat: job.pickupLocation.latitude,
+          lng: job.pickupLocation.longitude
+        }
+      },
+      dropoffLocation: job.dropoffLocation ? {
+        address: job.dropoffLocation.address,
+        coordinates: {
+          lat: job.dropoffLocation.latitude,
+          lng: job.dropoffLocation.longitude
+        }
+      } : null,
+      
+      // Vehicle info (from metadata - you'll need to add this to schema)
+      vehicle: job.metadata?.vehicle || {},
+      
+      // Additional details
+      additionalInfo: job.metadata?.additionalDetails || {},
+      
+      // Timeline
+      requestedAt: job.requestedAt,
+      
+      // Distance from provider (you'll need to calculate this)
+      distance: req.query.distance || null
+    };
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      data: job
+      data: jobDetails
     });
 
   } catch (error) {
-    console.error('Error cancelling job:', error);
-    res.status(500).json({
+    console.error('Error getting job details:', error);
+    return res.status(500).json({
       success: false,
-      message: 'Failed to cancel job',
+      message: 'Failed to get job details',
       error: error.message
     });
   }
 };
 
-// ==================== HELPER FUNCTIONS ====================
-
-// Update provider stats when job is completed
-async function updateProviderStats(providerId, jobPrice) {
+// Controller for provider to accept a job
+export const acceptJob = async (req, res) => {
   try {
-    const provider = await User.findById(providerId);
-    
-    if (provider) {
-      provider.totalJobsCompleted = (provider.totalJobsCompleted || 0) + 1;
-      provider.totalEarnings = (provider.totalEarnings || 0) + jobPrice;
-      await provider.save();
+    const { jobId } = req.params;
+    const providerId = req.user._id;
+
+    // Start a session for transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // Find and update job - only if still pending
+      const job = await Job.findByIdAndUpdate(
+        jobId,
+        {
+          providerId,
+          status: 'accepted',
+          acceptedAt: new Date()
+        },
+        { 
+          new: true,
+          session,
+          runValidators: true 
+        }
+      );
+
+      if (!job) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({
+          success: false,
+          message: 'Job not found'
+        });
+      }
+
+      // Check if job was already taken
+      if (job.providerId && job.providerId.toString() !== providerId.toString()) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: 'This job has already been accepted by another provider'
+        });
+      }
+
+      // Update provider status to unavailable
+      await ProviderLiveStatus.findOneAndUpdate(
+        { providerId },
+        {
+          isAvailable: false,
+          currentTaskId: job._id,
+          lastSeen: new Date()
+        },
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // Send notification to customer that provider is on the way
+      const customer = await User.findById(job.customerId);
+      if (customer?.firebaseUserId) {
+        await sendPushNotification(
+          customer.firebaseUserId,
+          {
+            title: 'Provider Found!',
+            body: `${req.user.fullName} is on the way to help you`,
+            data: {
+              type: 'PROVIDER_ACCEPTED',
+              jobId: job._id.toString(),
+              providerId: providerId.toString(),
+              providerName: req.user.fullName,
+              estimatedArrival: '10-15 minutes' // You can calculate this based on distance
+            }
+          }
+        );
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Job accepted successfully',
+        data: {
+          jobId: job._id,
+          status: job.status,
+          customerLocation: job.pickupLocation,
+          customerPhone: job.customerId?.phoneNumber,
+          instructions: job.description
+        }
+      });
+
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+      throw error;
     }
+
   } catch (error) {
-    console.error('Error updating provider stats:', error);
-  }
-}
-
-// Update provider's average rating
-async function updateProviderRating(providerId) {
-  try {
-    const jobs = await Job.find({
-      providerId,
-      status: 'completed',
-      customerRating: { $exists: true, $ne: null }
+    console.error('Error accepting job:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to accept job',
+      error: error.message
     });
+  }
+};
 
-    if (jobs.length > 0) {
-      const totalRating = jobs.reduce((sum, job) => sum + job.customerRating, 0);
-      const averageRating = totalRating / jobs.length;
+// Controller to check job status (for customer polling)
+export const checkJobStatus = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const userId = req.user._id;
 
-      await User.findByIdAndUpdate(providerId, {
-        rating: Math.round(averageRating * 10) / 10,
-        totalReviews: jobs.length
+    const job = await Job.findById(jobId)
+      .populate('providerId', 'fullName phoneNumber rating profileImage')
+      .lean();
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
       });
     }
-  } catch (error) {
-    console.error('Error updating provider rating:', error);
-  }
-}
 
-// Helper function to format time ago
-function getTimeAgo(date) {
-  const now = new Date();
-  const diffInMinutes = Math.floor((now - new Date(date)) / (1000 * 60));
-  
-  if (diffInMinutes < 60) {
-    return `${diffInMinutes} MINUTE${diffInMinutes === 1 ? '' : 'S'} AGO`;
-  } else if (diffInMinutes < 1440) {
-    const hours = Math.floor(diffInMinutes / 60);
-    return `${hours} HOUR${hours === 1 ? '' : 'S'} AGO`;
-  } else {
-    const days = Math.floor(diffInMinutes / 1440);
-    return `${days} DAY${days === 1 ? '' : 'S'} AGO`;
+    // Check if user is authorized (either customer who created or assigned provider)
+    if (job.customerId.toString() !== userId.toString() && 
+        (!job.providerId || job.providerId._id.toString() !== userId.toString())) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    let response = {
+      success: true,
+      status: job.status,
+      jobId: job._id,
+      jobNumber: job.jobNumber
+    };
+
+    // Add provider info if assigned
+    if (job.providerId && job.status !== 'pending' && job.status !== 'cancelled') {
+      response.provider = {
+        id: job.providerId._id,
+        name: job.providerId.fullName,
+        rating: job.providerId.rating,
+        profileImage: job.providerId.profileImage,
+        phoneNumber: job.providerId.phoneNumber
+      };
+      
+      // Add estimated arrival if provider is en-route
+      if (job.status === 'accepted' || job.status === 'en-route') {
+        // You can calculate this based on provider's current location
+        response.estimatedArrival = '10-15 minutes';
+      }
+    }
+
+    return res.status(200).json(response);
+
+  } catch (error) {
+    console.error('Error checking job status:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to check job status',
+      error: error.message
+    });
   }
-}
+};
