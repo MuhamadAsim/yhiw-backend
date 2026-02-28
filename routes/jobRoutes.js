@@ -3,8 +3,6 @@ import {
   // Provider endpoints
   getProviderRecentJobs,
   getProviderJobHistory,
-  getJobDetails,
-  updateJobStatus,
   getTodaysJobs,
   checkJobStatus,
   getJobDetailsForProvider,
@@ -28,8 +26,6 @@ router.get('/provider/:providerId/history', getProviderJobHistory);
 // Get provider's today's jobs with stats
 router.get('/provider/:providerId/today', getTodaysJobs);
 
-// Update job status
-router.put('/:jobId/status', updateJobStatus);
 
 // ==================== CUSTOMER JOB ROUTES ====================
 // Customer finds provider (NEW JOB CREATION)
@@ -45,9 +41,5 @@ router.get('/provider/job/:jobId', authenticateToken, getJobDetailsForProvider);
 // Provider accepts a job
 router.post('/provider/job/:jobId/accept', authenticateToken, acceptJob);
 
-// ==================== COMMON JOB ROUTES ====================
-// Get single job details (accessible by both provider and customer)
-// IMPORTANT: This must come AFTER specific routes to avoid conflicts
-router.get('/:jobId', getJobDetails);
 
 export default router;
