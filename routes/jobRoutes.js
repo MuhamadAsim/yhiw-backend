@@ -33,8 +33,11 @@ router.get('/provider/:providerId/today', getTodaysJobs);
 // Update job status
 router.put('/:jobId/status', updateJobStatus);
 
-// ==================== CUSTOMER JOB ROUTES ====================
 
+
+
+
+// ==================== CUSTOMER JOB ROUTES ===================
 
 
 

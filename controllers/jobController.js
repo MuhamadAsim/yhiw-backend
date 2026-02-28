@@ -366,7 +366,7 @@ export const findProvider = async (req, res) => {
     } = req.body;
 
     // Get customer ID from authenticated user
-    const customerId = req.user._id;
+    const customerId = req.user.id;
 
     // Generate unique job number
     const date = new Date();
@@ -541,7 +541,7 @@ export const findProvider = async (req, res) => {
 export const getJobDetailsForProvider = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const providerId = req.user._id; // From auth middleware
+    const providerId = req.user.id; // From auth middleware
 
     const job = await Job.findById(jobId)
       .populate('customerId', 'fullName phoneNumber profileImage rating')
@@ -630,7 +630,7 @@ export const getJobDetailsForProvider = async (req, res) => {
 export const acceptJob = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const providerId = req.user._id;
+    const providerId = req.user.id;
 
     // Start a session for transaction
     const session = await mongoose.startSession();
@@ -736,7 +736,7 @@ export const acceptJob = async (req, res) => {
 export const checkJobStatus = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const userId = req.user._id;
+    const userId = req.user.id;
 
     const job = await Job.findById(jobId)
       .populate('providerId', 'fullName phoneNumber rating profileImage')

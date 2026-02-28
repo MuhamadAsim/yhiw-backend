@@ -25,7 +25,7 @@ const jobSchema = new mongoose.Schema({
   providerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: false
   },
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
