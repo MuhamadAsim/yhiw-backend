@@ -25,7 +25,7 @@ const jobSchema = new mongoose.Schema({
   providerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: false
+    required: false  // Important: false because it's assigned later
   },
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -161,49 +161,19 @@ const jobSchema = new mongoose.Schema({
   },
   disputeReason: String,
   disputeResolvedAt: Date,
-  disputeResolution: String
+  disputeResolution: String,
+
+  // Metadata field for additional data
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  }
 
 }, {
   timestamps: true
 });
 
-// models/jobModel.js - Replace your pre-save hook with this
-
-// Generate unique job number before saving
-jobSchema.pre('save', function(next) {
-  // Use regular function, not arrow, to have access to 'this'
-  console.log('🔄 Pre-save hook triggered');
-  
-  // Only generate if jobNumber doesn't exist
-  if (!this.jobNumber) {
-    try {
-      const date = new Date();
-      const year = date.getFullYear().toString().slice(-2);
-      const month = (date.getMonth() + 1).toString().padStart(2, '0');
-      const day = date.getDate().toString().padStart(2, '0');
-      const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-      this.jobNumber = `JOB-${year}${month}${day}-${random}`;
-      console.log('✅ Generated job number:', this.jobNumber);
-    } catch (error) {
-      console.error('❌ Error generating job number:', error);
-      return next(error); // Make sure to return here
-    }
-  }
-  
-  // IMPORTANT: Make sure next is called exactly once
-  console.log('✅ Pre-save hook complete, calling next()');
-  return next(); // Add return to be safe
-});
-
-// Add error handler for post-save
-jobSchema.post('save', function(error, doc, next) {
-  if (error) {
-    console.error('❌ Post-save error:', error);
-    next(error);
-  } else {
-    next();
-  }
-});
+// NO PRE-SAVE HOOK - Removed completely
 
 // Indexes for better query performance
 jobSchema.index({ providerId: 1, createdAt: -1 });

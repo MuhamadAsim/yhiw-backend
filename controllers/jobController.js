@@ -339,10 +339,23 @@ export const submitJobReview = async (req, res) => {
 
 
 
+// Helper function to generate job number
+const generateJobNumber = () => {
+  const date = new Date();
+  const year = date.getFullYear().toString().slice(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+  return `JOB-${year}${month}${day}-${random}`;
+};
 
 // Controller to handle customer finding a provider
 export const findProvider = async (req, res) => {
   try {
+    console.log('='.repeat(50));
+    console.log('🚀 FIND PROVIDER CONTROLLER STARTED');
+    console.log('='.repeat(50));
+
     const {
       pickup,
       dropoff,
@@ -367,26 +380,30 @@ export const findProvider = async (req, res) => {
 
     // Get customer ID from authenticated user
     const customerId = req.user.id;
+    console.log('Customer ID from token:', customerId);
+
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated properly'
+      });
+    }
 
     // Generate unique job number
-    const date = new Date();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-    const jobNumber = `JOB-${year}${month}${day}-${random}`;
+    const jobNumber = generateJobNumber();
+    console.log('Generated job number:', jobNumber);
 
     // Create the job in database with 'pending' status
     const job = new Job({
       jobNumber,
-      providerId: null,
+      // providerId is omitted - will be set when provider accepts
       customerId,
       
       title: serviceName,
       serviceType: serviceCategory,
       description: additionalDetails?.description || '',
       
-      price: payment?.totalAmount || servicePrice,
+      price: payment?.totalAmount || parseFloat(servicePrice) || 0,
       paymentMethod: payment?.paymentMethod || 'cash',
       paymentStatus: 'pending',
       
@@ -420,97 +437,107 @@ export const findProvider = async (req, res) => {
       }
     });
 
+    console.log('Attempting to save job...');
     await job.save();
+    console.log('✅ Job saved successfully with ID:', job._id);
 
     // Find nearby active providers
     const searchRadii = [3, 5, 7]; // km
     let eligibleProviders = [];
 
-    for (const radius of searchRadii) {
-      if (eligibleProviders.length > 0) break;
+    // Only search if pickup coordinates exist
+    if (pickup?.coordinates?.lat && pickup?.coordinates?.lng) {
+      for (const radius of searchRadii) {
+        if (eligibleProviders.length > 0) break;
 
-      const providers = await ProviderLiveStatus.aggregate([
-        {
-          $match: {
-            isOnline: true,
-            isAvailable: true,
-            currentTaskId: null,
-            lastSeen: { $gte: new Date(Date.now() - 90 * 1000) }, // Last 1.5 minutes
-            'currentLocation.coordinates': { $exists: true, $ne: [] }
+        const providers = await ProviderLiveStatus.aggregate([
+          {
+            $match: {
+              isOnline: true,
+              isAvailable: true,
+              currentTaskId: null,
+              lastSeen: { $gte: new Date(Date.now() - 90 * 1000) }, // Last 1.5 minutes
+              'currentLocation.coordinates': { $exists: true, $ne: [] }
+            }
+          },
+          {
+            $geoNear: {
+              near: {
+                type: 'Point',
+                coordinates: [pickup.coordinates.lng, pickup.coordinates.lat]
+              },
+              distanceField: 'distance',
+              maxDistance: radius * 1000,
+              spherical: true,
+              key: 'currentLocation'
+            }
+          },
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'providerId',
+              foreignField: '_id',
+              as: 'userInfo'
+            }
+          },
+          {
+            $match: {
+              'userInfo.status': 'active',
+              'userInfo.role': 'provider',
+              'userInfo.serviceType': { $in: [serviceCategory] }
+            }
+          },
+          {
+            $project: {
+              providerId: 1,
+              distance: 1,
+              'userInfo.fullName': 1,
+              'userInfo.firebaseUserId': 1,
+              'userInfo.rating': 1,
+              'userInfo.totalJobsCompleted': 1,
+              'userInfo.profileImage': 1,
+              'currentLocation': 1
+            }
+          },
+          {
+            $sort: { distance: 1 }
           }
-        },
-        {
-          $geoNear: {
-            near: {
-              type: 'Point',
-              coordinates: [pickup?.coordinates?.lng || 0, pickup?.coordinates?.lat || 0]
-            },
-            distanceField: 'distance',
-            maxDistance: radius * 1000,
-            spherical: true,
-            key: 'currentLocation'
-          }
-        },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'providerId',
-            foreignField: '_id',
-            as: 'userInfo'
-          }
-        },
-        {
-          $match: {
-            'userInfo.status': 'active',
-            'userInfo.role': 'provider',
-            'userInfo.serviceType': { $in: [serviceCategory] }
-          }
-        },
-        {
-          $project: {
-            providerId: 1,
-            distance: 1,
-            'userInfo.fullName': 1,
-            'userInfo.firebaseUserId': 1,
-            'userInfo.rating': 1,
-            'userInfo.totalJobsCompleted': 1,
-            'userInfo.profileImage': 1,
-            'currentLocation': 1
-          }
-        },
-        {
-          $sort: { distance: 1 }
-        }
-      ]);
+        ]);
 
-      eligibleProviders = providers;
+        eligibleProviders = providers;
+      }
     }
 
-    // Create notifications for all eligible providers
-    const notificationPromises = eligibleProviders.map(async (provider) => {
-      const notification = new Notification({
-        userId: provider.providerId,
-        type: 'NEW_JOB_REQUEST',
-        title: 'New Service Request',
-        message: `${serviceName} - ${pickup?.address?.substring(0, 50)}...`,
-        data: {
-          jobId: job._id.toString(),
-          jobNumber: job.jobNumber,
-          serviceType: serviceCategory,
-          serviceName: serviceName,
-          price: payment?.totalAmount || servicePrice,
-          pickupAddress: pickup?.address,
-          distance: Math.round(provider.distance / 1000 * 10) / 10, // in km with 1 decimal
-          customerName: customer?.name || 'Customer',
-          timestamp: new Date().toISOString()
-        }
-      });
-      
-      return notification.save();
-    });
+    console.log(`Found ${eligibleProviders.length} eligible providers`);
 
-    // Wait for all notifications to be created
-    await Promise.allSettled(notificationPromises);
+    // Create notifications for all eligible providers
+    if (eligibleProviders.length > 0) {
+      const notificationPromises = eligibleProviders.map(async (provider) => {
+        const notification = new Notification({
+          userId: provider.providerId,
+          type: 'NEW_JOB_REQUEST',
+          title: 'New Service Request',
+          message: `${serviceName} - ${pickup?.address?.substring(0, 50)}...`,
+          data: {
+            jobId: job._id.toString(),
+            jobNumber: job.jobNumber,
+            serviceType: serviceCategory,
+            serviceName: serviceName,
+            price: payment?.totalAmount || servicePrice,
+            pickupAddress: pickup?.address,
+            distance: Math.round(provider.distance / 1000 * 10) / 10, // in km with 1 decimal
+            customerName: customer?.name || 'Customer',
+            timestamp: new Date().toISOString()
+          }
+        });
+        
+        return notification.save();
+      });
+
+      // Wait for all notifications to be created
+      await Promise.allSettled(notificationPromises);
+      console.log(`✅ Created ${eligibleProviders.length} notifications`);
+    }
 
     // Return response to customer
     return res.status(200).json({
@@ -524,7 +551,33 @@ export const findProvider = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error in findProvider:', error);
+    console.error('❌ Error in findProvider:', error);
+    console.error('Error stack:', error.stack);
+    
+    // Check for validation errors
+    if (error.name === 'ValidationError') {
+      const validationErrors = {};
+      Object.keys(error.errors).forEach(key => {
+        validationErrors[key] = error.errors[key].message;
+      });
+      console.error('Validation errors:', validationErrors);
+      
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: validationErrors
+      });
+    }
+
+    // Check for duplicate key error
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Duplicate job number - please try again',
+        error: error.message
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: 'Failed to process request',
@@ -533,18 +586,14 @@ export const findProvider = async (req, res) => {
   }
 };
 
-
-
-
-
 // Controller for provider to get job details when they click notification
 export const getJobDetailsForProvider = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const providerId = req.user.id; // From auth middleware
+    const providerId = req.user.id;
 
     const job = await Job.findById(jobId)
-      .populate('customerId', 'fullName phoneNumber profileImage rating')
+      .populate('customerId', 'fullName phoneNumber profileImage rating totalJobsCompleted')
       .lean();
 
     if (!job) {
@@ -598,17 +647,14 @@ export const getJobDetailsForProvider = async (req, res) => {
         }
       } : null,
       
-      // Vehicle info (from metadata - you'll need to add this to schema)
+      // Vehicle info from metadata
       vehicle: job.metadata?.vehicle || {},
       
       // Additional details
       additionalInfo: job.metadata?.additionalDetails || {},
       
       // Timeline
-      requestedAt: job.requestedAt,
-      
-      // Distance from provider (you'll need to calculate this)
-      distance: req.query.distance || null
+      requestedAt: job.requestedAt
     };
 
     return res.status(200).json({
@@ -650,7 +696,7 @@ export const acceptJob = async (req, res) => {
           session,
           runValidators: true 
         }
-      );
+      ).populate('customerId', 'firebaseUserId');
 
       if (!job) {
         await session.abortTransaction();
@@ -685,23 +731,21 @@ export const acceptJob = async (req, res) => {
       await session.commitTransaction();
       session.endSession();
 
-      // Send notification to customer that provider is on the way
-      const customer = await User.findById(job.customerId);
-      if (customer?.firebaseUserId) {
-        await sendPushNotification(
-          customer.firebaseUserId,
-          {
-            title: 'Provider Found!',
-            body: `${req.user.fullName} is on the way to help you`,
-            data: {
-              type: 'PROVIDER_ACCEPTED',
-              jobId: job._id.toString(),
-              providerId: providerId.toString(),
-              providerName: req.user.fullName,
-              estimatedArrival: '10-15 minutes' // You can calculate this based on distance
-            }
+      // Create notification for customer
+      if (job.customerId?.firebaseUserId) {
+        const notification = new Notification({
+          userId: job.customerId._id,
+          type: 'JOB_ACCEPTED',
+          title: 'Provider Found!',
+          message: 'A provider has accepted your request and is on the way',
+          data: {
+            jobId: job._id.toString(),
+            jobNumber: job.jobNumber,
+            providerId: providerId.toString(),
+            status: 'accepted'
           }
-        );
+        });
+        await notification.save();
       }
 
       return res.status(200).json({
@@ -709,10 +753,10 @@ export const acceptJob = async (req, res) => {
         message: 'Job accepted successfully',
         data: {
           jobId: job._id,
+          jobNumber: job.jobNumber,
           status: job.status,
           customerLocation: job.pickupLocation,
-          customerPhone: job.customerId?.phoneNumber,
-          instructions: job.description
+          customerPhone: job.customerId?.phoneNumber
         }
       });
 
@@ -777,7 +821,6 @@ export const checkJobStatus = async (req, res) => {
       
       // Add estimated arrival if provider is en-route
       if (job.status === 'accepted' || job.status === 'en-route') {
-        // You can calculate this based on provider's current location
         response.estimatedArrival = '10-15 minutes';
       }
     }
