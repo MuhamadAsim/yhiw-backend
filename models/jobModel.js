@@ -98,6 +98,7 @@ const jobSchema = new mongoose.Schema({
       'in-progress',   // Service in progress
       'completed',     // Job completed successfully
       'cancelled',     // Job cancelled
+      'expired',       // Job expired (no provider found within 5 mins)
       'no-show'        // Customer didn't show up
     ],
     default: 'pending'
@@ -119,6 +120,7 @@ const jobSchema = new mongoose.Schema({
     enum: ['customer', 'provider']
   },
   cancellationReason: String,
+  expiredAt: Date,  // When job expired (no provider found)
 
   // Duration tracking
   estimatedDuration: {
@@ -167,13 +169,35 @@ const jobSchema = new mongoose.Schema({
   metadata: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
+  },
+
+  // TTL index field - this is what auto-deletes documents
+  expireAt: {
+    type: Date,
+    default: null,
+    index: { expires: 0 } // This tells MongoDB to delete when this time is reached
   }
 
 }, {
   timestamps: true
 });
 
-// NO PRE-SAVE HOOK - Removed completely
+// Pre-save hook to set expireAt for pending jobs
+jobSchema.pre('save', function(next) {
+  // If this is a new pending job, set expireAt to 5 minutes from now
+  if (this.isNew && this.status === 'pending') {
+    const fiveMinutesFromNow = new Date();
+    fiveMinutesFromNow.setMinutes(fiveMinutesFromNow.getMinutes() + 5);
+    this.expireAt = fiveMinutesFromNow;
+  }
+  
+  // If job status changes from pending to something else, remove expiration
+  if (!this.isNew && this.isModified('status') && this.status !== 'pending') {
+    this.expireAt = null;
+  }
+  
+  next();
+});
 
 // Indexes for better query performance
 jobSchema.index({ providerId: 1, createdAt: -1 });
@@ -181,7 +205,24 @@ jobSchema.index({ customerId: 1, createdAt: -1 });
 jobSchema.index({ status: 1 });
 jobSchema.index({ jobNumber: 1 }, { unique: true });
 jobSchema.index({ completedAt: 1 });
-jobSchema.index({ 'pickupLocation.coordinates': '2dsphere' });
+jobSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
+jobSchema.index({ 'pickupLocation.latitude': 1, 'pickupLocation.longitude': 1 });
+
+// Static method to manually cleanup expired jobs (as backup)
+jobSchema.statics.cleanupExpiredJobs = async function() {
+  const result = await this.deleteMany({
+    status: 'pending',
+    requestedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } // Older than 5 minutes
+  });
+  console.log(`🧹 Cleaned up ${result.deletedCount} expired pending jobs`);
+  return result;
+};
 
 const Job = mongoose.model('Job', jobSchema);
+
+// Optional: Run cleanup every minute as backup if TTL doesn't work
+// setInterval(async () => {
+//   await Job.cleanupExpiredJobs();
+// }, 60 * 1000); // Every minute
+
 export default Job;

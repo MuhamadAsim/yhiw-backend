@@ -1,4 +1,4 @@
-// websocket/server.js
+// websocket/server.js - Fixed version
 import { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import { Server } from 'http';
@@ -6,9 +6,11 @@ import { Server } from 'http';
 class WebSocketManager {
   constructor(server) {
     this.wss = new WebSocketServer({ server });
-    this.clients = new Map(); // userId -> { ws, userType, subscriptions }
+    this.clients = new Map(); // socketId -> { ws, userId, userType, subscriptions }
     this.userSockets = new Map(); // userId -> Set of socketIds
     this.rooms = new Map(); // roomName -> Set of userIds
+    this.userLocations = new Map(); // userId -> { lat, lng, address, timestamp }
+    this.jobViewers = new Map(); // jobId -> Set of userIds
     
     this.initialize();
   }
@@ -50,7 +52,7 @@ class WebSocketManager {
         // Send connection confirmation
         ws.send(JSON.stringify({
           type: 'connection_established',
-          data: { socketId, userId, userType }
+          data: { socketId, userId, userType, timestamp: new Date().toISOString() }
         }));
 
         // Handle incoming messages
@@ -61,6 +63,11 @@ class WebSocketManager {
         // Handle disconnection
         ws.on('close', () => {
           this.handleDisconnect(socketId, userId);
+        });
+
+        // Handle errors
+        ws.on('error', (error) => {
+          console.error(`WebSocket error for ${userId}:`, error);
         });
 
       } catch (error) {
@@ -78,7 +85,7 @@ class WebSocketManager {
       if (!client) return;
 
       const { type, payload } = data;
-      console.log(`📨 Message from ${client.userId}:`, type);
+      console.log(`📨 Message from ${client.userId} (${client.userType}):`, type);
 
       switch (type) {
         case 'subscribe':
@@ -102,8 +109,19 @@ class WebSocketManager {
         case 'decline_job':
           this.handleDeclineJob(client, payload);
           break;
+        case 'job_viewing':
+          this.handleJobViewing(client, payload);
+          break;
+        case 'request_pending_jobs':
+          this.handleRequestPendingJobs(client);
+          break;
         default:
           console.log('Unknown message type:', type);
+          // Send error back to client
+          this.sendToUser(client.userId, {
+            type: 'error',
+            data: { message: `Unknown message type: ${type}` }
+          });
       }
     } catch (error) {
       console.error('Error handling message:', error);
@@ -122,6 +140,12 @@ class WebSocketManager {
     this.rooms.get(room).add(client.userId);
     
     console.log(`✅ ${client.userId} subscribed to ${room}`);
+    
+    // Confirm subscription
+    this.sendToUser(client.userId, {
+      type: 'subscribed',
+      data: { room }
+    });
   }
 
   handleUnsubscribe(socketId, { room }) {
@@ -140,12 +164,23 @@ class WebSocketManager {
     // For now, just acknowledge
     this.sendToUser(client.userId, {
       type: 'status_update',
-      data: { bookingId, status: 'searching' }
+      data: { bookingId, status: 'searching', timestamp: new Date().toISOString() }
     });
   }
 
   handleProviderStatus(client, { isOnline, location }) {
     console.log(`Provider ${client.userId} is now ${isOnline ? 'online' : 'offline'}`);
+    
+    if (isOnline && location) {
+      // Store provider location
+      this.userLocations.set(client.userId, {
+        ...location,
+        lastSeen: new Date().toISOString()
+      });
+    } else {
+      // Remove location when offline
+      this.userLocations.delete(client.userId);
+    }
     
     // Broadcast to relevant rooms (e.g., nearby customers)
     this.broadcastToRoom('nearby_customers', {
@@ -153,13 +188,19 @@ class WebSocketManager {
       data: {
         providerId: client.userId,
         isOnline,
-        location
+        location: isOnline ? location : null
       }
     });
   }
 
   handleLocationUpdate(client, location) {
     console.log(`Location update from ${client.userId}`);
+    
+    // Update stored location
+    this.userLocations.set(client.userId, {
+      ...location,
+      lastSeen: new Date().toISOString()
+    });
     
     // Broadcast to customers who are waiting for this provider
     this.broadcastToRoom(`provider_${client.userId}`, {
@@ -171,30 +212,95 @@ class WebSocketManager {
     });
   }
 
-  handleAcceptJob(client, { jobId }) {
-    console.log(`Provider ${client.userId} accepted job ${jobId}`);
+  handleAcceptJob(client, { jobId, bookingId, responseTime }) {
+    console.log(`Provider ${client.userId} accepted job ${jobId || bookingId}`);
     
-    // Notify customer
-    this.broadcastToRoom(`job_${jobId}`, {
+    const jobIdentifier = jobId || bookingId;
+    
+    // Notify customer (via job room)
+    this.broadcastToRoom(`job_${jobIdentifier}`, {
       type: 'job_accepted',
       data: {
-        jobId,
+        jobId: jobIdentifier,
+        bookingId: bookingId || jobId,
         providerId: client.userId,
-        acceptedAt: new Date().toISOString()
+        providerName: client.providerName, // You'd need to fetch this
+        acceptedAt: new Date().toISOString(),
+        responseTime
       }
     });
-  }
-
-  handleDeclineJob(client, { jobId }) {
-    console.log(`Provider ${client.userId} declined job ${jobId}`);
     
-    // Notify customer or job dispatcher
-    this.broadcastToRoom(`job_${jobId}`, {
-      type: 'job_declined',
+    // Also notify all providers who were viewing this job that it's taken
+    this.broadcastToRoom(`job_${jobIdentifier}_viewers`, {
+      type: 'job_taken',
       data: {
-        jobId,
+        jobId: jobIdentifier,
         providerId: client.userId
       }
+    });
+    
+    // Clean up job viewers
+    this.jobViewers.delete(jobIdentifier);
+  }
+
+  handleDeclineJob(client, { jobId, bookingId, reason }) {
+    console.log(`Provider ${client.userId} declined job ${jobId || bookingId}`);
+    
+    const jobIdentifier = jobId || bookingId;
+    
+    // Notify job dispatcher
+    this.broadcastToRoom(`job_${jobIdentifier}`, {
+      type: 'job_declined',
+      data: {
+        jobId: jobIdentifier,
+        bookingId: bookingId || jobId,
+        providerId: client.userId,
+        reason: reason || 'provider_declined'
+      }
+    });
+    
+    // Remove from job viewers
+    if (this.jobViewers.has(jobIdentifier)) {
+      this.jobViewers.get(jobIdentifier).delete(client.userId);
+    }
+  }
+
+  handleJobViewing(client, { jobId, bookingId }) {
+    const jobIdentifier = jobId || bookingId;
+    if (!jobIdentifier) return;
+    
+    console.log(`Provider ${client.userId} is viewing job ${jobIdentifier}`);
+    
+    // Add to job viewers
+    if (!this.jobViewers.has(jobIdentifier)) {
+      this.jobViewers.set(jobIdentifier, new Set());
+    }
+    this.jobViewers.get(jobIdentifier).add(client.userId);
+    
+    // Broadcast viewer count to all viewers of this job
+    const viewerCount = this.jobViewers.get(jobIdentifier).size;
+    this.broadcastToRoom(`job_${jobIdentifier}_viewers`, {
+      type: 'viewer_count',
+      data: {
+        jobId: jobIdentifier,
+        count: viewerCount
+      }
+    });
+    
+    // Subscribe to job updates automatically
+    client.subscriptions.add(`job_${jobIdentifier}`);
+    if (!this.rooms.has(`job_${jobIdentifier}`)) {
+      this.rooms.set(`job_${jobIdentifier}`, new Set());
+    }
+    this.rooms.get(`job_${jobIdentifier}`).add(client.userId);
+  }
+
+  handleRequestPendingJobs(client) {
+    // This would query database for pending jobs for this provider
+    // For now, just acknowledge
+    this.sendToUser(client.userId, {
+      type: 'pending_jobs',
+      data: { jobs: [] } // Would be populated from DB
     });
   }
 
@@ -206,23 +312,40 @@ class WebSocketManager {
       if (this.userSockets.get(userId).size === 0) {
         this.userSockets.delete(userId);
         
-        // Clean up room subscriptions
+        // Remove from rooms
         this.rooms.forEach((users, room) => {
           if (users.has(userId)) {
             users.delete(userId);
           }
         });
+        
+        // Remove from job viewers
+        this.jobViewers.forEach((viewers, jobId) => {
+          if (viewers.has(userId)) {
+            viewers.delete(userId);
+            // Update viewer count
+            if (viewers.size > 0) {
+              this.broadcastToRoom(`job_${jobId}_viewers`, {
+                type: 'viewer_count',
+                data: { jobId, count: viewers.size }
+              });
+            }
+          }
+        });
+        
+        // Remove location
+        this.userLocations.delete(userId);
+        
+        console.log(`🔌 WebSocket disconnected: ${userId} (all sockets)`);
       }
     }
-    
-    console.log(`🔌 WebSocket disconnected: ${userId}`);
   }
 
   // Public methods for external use
 
   sendToUser(userId, message) {
     const sockets = this.userSockets.get(userId);
-    if (!sockets) return false;
+    if (!sockets || sockets.size === 0) return false;
 
     const messageStr = JSON.stringify(message);
     let sent = false;
@@ -230,8 +353,12 @@ class WebSocketManager {
     sockets.forEach(socketId => {
       const client = this.clients.get(socketId);
       if (client && client.ws.readyState === 1) { // WebSocket.OPEN
-        client.ws.send(messageStr);
-        sent = true;
+        try {
+          client.ws.send(messageStr);
+          sent = true;
+        } catch (error) {
+          console.error(`Error sending to ${userId}:`, error);
+        }
       }
     });
 
@@ -240,7 +367,7 @@ class WebSocketManager {
 
   sendToRoom(room, message) {
     const users = this.rooms.get(room);
-    if (!users) return 0;
+    if (!users || users.size === 0) return 0;
 
     let count = 0;
     users.forEach(userId => {
@@ -256,21 +383,124 @@ class WebSocketManager {
     return this.sendToRoom(room, message);
   }
 
-  // Send job request to nearby providers
+  // Send job request to specific providers
   sendJobRequestToProviders(jobData, providerIds) {
     const message = {
       type: 'new_job_request',
-      data: jobData
+      data: {
+        id: jobData.jobId || jobData.bookingId,
+        bookingId: jobData.bookingId,
+        customerName: jobData.customerName,
+        customerId: jobData.customerId,
+        serviceType: jobData.serviceType,
+        serviceName: jobData.serviceName,
+        pickupLocation: jobData.pickupLocation,
+        pickupLat: jobData.pickupLat,
+        pickupLng: jobData.pickupLng,
+        dropoffLocation: jobData.dropoffLocation,
+        dropoffLat: jobData.dropoffLat,
+        dropoffLng: jobData.dropoffLng,
+        distance: jobData.distance,
+        estimatedEarnings: jobData.estimatedEarnings,
+        price: jobData.price || jobData.estimatedEarnings,
+        urgency: jobData.urgency,
+        timestamp: new Date().toISOString(),
+        description: jobData.description,
+        vehicleDetails: jobData.vehicleDetails
+      }
     };
 
     let sentCount = 0;
     providerIds.forEach(providerId => {
       if (this.sendToUser(providerId, message)) {
         sentCount++;
+        // Subscribe provider to job updates
+        this.subscribeToJob(providerId, jobData.jobId || jobData.bookingId);
       }
     });
 
     return sentCount;
+  }
+
+  // Send job request to nearby providers based on location
+  sendJobRequestToNearbyProviders(jobData, radius = 10) { // radius in km
+    const nearbyProviders = this.findNearbyProviders(
+      jobData.pickupLat, 
+      jobData.pickupLng, 
+      radius
+    );
+    
+    return this.sendJobRequestToProviders(jobData, nearbyProviders);
+  }
+
+  findNearbyProviders(lat, lng, radiusKm) {
+    const nearby = [];
+    
+    this.userLocations.forEach((location, providerId) => {
+      // Calculate distance (simplified - you'd want proper haversine formula)
+      const distance = this.calculateDistance(
+        lat, lng,
+        location.latitude, location.longitude
+      );
+      
+      if (distance <= radiusKm) {
+        nearby.push(providerId);
+      }
+    });
+    
+    return nearby;
+  }
+
+  calculateDistance(lat1, lon1, lat2, lon2) {
+    // Haversine formula to calculate distance in km
+    const R = 6371; // Earth's radius in km
+    const dLat = this.deg2rad(lat2 - lat1);
+    const dLon = this.deg2rad(lon2 - lon1);
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(this.deg2rad(lat1)) * Math.cos(this.deg2rad(lat2)) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2); 
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+    const distance = R * c; // Distance in km
+    return distance;
+  }
+
+  deg2rad(deg) {
+    return deg * (Math.PI/180);
+  }
+
+  subscribeToJob(providerId, jobId) {
+    if (!this.rooms.has(`job_${jobId}`)) {
+      this.rooms.set(`job_${jobId}`, new Set());
+    }
+    this.rooms.get(`job_${jobId}`).add(providerId);
+    
+    // Also add to viewers room
+    if (!this.rooms.has(`job_${jobId}_viewers`)) {
+      this.rooms.set(`job_${jobId}_viewers`, new Set());
+    }
+    this.rooms.get(`job_${jobId}_viewers`).add(providerId);
+  }
+
+  // Notify customer about provider status
+  notifyCustomerOfProvider(customerId, providerData) {
+    this.sendToUser(customerId, {
+      type: 'provider_assigned',
+      data: providerData
+    });
+  }
+
+  // Update job status
+  updateJobStatus(jobId, status, additionalData = {}) {
+    this.broadcastToRoom(`job_${jobId}`, {
+      type: 'job_status_update',
+      data: {
+        jobId,
+        status,
+        ...additionalData,
+        timestamp: new Date().toISOString()
+      }
+    });
   }
 
   generateSocketId() {
@@ -282,10 +512,12 @@ class WebSocketManager {
       totalConnections: this.clients.size,
       totalUsers: this.userSockets.size,
       totalRooms: this.rooms.size,
+      totalJobsBeingViewed: this.jobViewers.size,
       connectionsByType: {
         customers: Array.from(this.clients.values()).filter(c => c.userType === 'customer').length,
         providers: Array.from(this.clients.values()).filter(c => c.userType === 'provider').length
-      }
+      },
+      onlineProviders: this.userLocations.size
     };
   }
 }
