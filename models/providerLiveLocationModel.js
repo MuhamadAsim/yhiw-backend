@@ -27,7 +27,8 @@ const providerLiveStatusSchema = new mongoose.Schema({
     },
     coordinates: {
       type: [Number], // [longitude, latitude]
-      index: '2dsphere'
+      // REMOVE the inline index from here
+      required: true // Add this to ensure coordinates are always present
     },
     isManual: {
       type: Boolean,
@@ -56,7 +57,7 @@ const providerLiveStatusSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
-// Create 2dsphere index for geospatial queries
+// Create ONLY ONE 2dsphere index for geospatial queries
 providerLiveStatusSchema.index({ currentLocation: '2dsphere' });
 
 const ProviderLiveStatus = mongoose.model('ProviderLiveStatus', providerLiveStatusSchema);
