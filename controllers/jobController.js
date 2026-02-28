@@ -431,8 +431,6 @@ const generateJobNumber = () => {
 
 
 
-
-
 // Controller to handle customer finding a provider
 export const findProvider = async (req, res) => {
   try {
@@ -524,17 +522,15 @@ export const findProvider = async (req, res) => {
     await job.save();
     console.log('✅ Job saved successfully with ID:', job._id);
 
-    // Find ALL active providers - REMOVED location and last seen filters for testing
-    console.log('Searching for any online and available providers...');
+    // FIND ANY PROVIDER - COMPLETELY RELAXED FOR TESTING
+    console.log('🔍 Searching for ANY provider in the system...');
     
+    // First, try to find providers in ProviderLiveStatus
     const eligibleProviders = await ProviderLiveStatus.aggregate([
       {
         $match: {
-          isOnline: true,
-          isAvailable: true,
-          currentTaskId: null
-          // REMOVED: lastSeen filter
-          // REMOVED: location/geoNear completely
+          // Accept any provider that exists in this collection
+          // No filters for online/available - we want ANY provider for testing
         }
       },
       {
@@ -553,54 +549,154 @@ export const findProvider = async (req, res) => {
       },
       {
         $match: {
-          'userInfo.status': 'active',
           'userInfo.role': 'provider',
-          'userInfo.serviceType': { $in: [serviceCategory] }
+          'userInfo.status': 'active'
+          // REMOVED service type filter completely
+          // REMOVED online/available requirements
         }
+      },
+      {
+        $limit: 10 // Limit to 10 providers max
       },
       {
         $project: {
           providerId: 1,
-          // REMOVED: distance field since we're not using geoNear
           'userInfo.fullName': 1,
           'userInfo.firebaseUserId': 1,
           'userInfo.rating': 1,
           'userInfo.totalJobsCompleted': 1,
           'userInfo.profileImage': 1,
-          'currentLocation': 1
+          'userInfo.serviceType': 1,
+          'currentLocation': 1,
+          isOnline: 1,
+          isAvailable: 1,
+          lastSeen: 1
         }
       }
-      // REMOVED: $sort by distance
     ]);
 
-    console.log(`Total eligible providers found: ${eligibleProviders.length}`);
+    console.log(`✅ Found ${eligibleProviders.length} providers in ProviderLiveStatus`);
+
+    // If no providers in LiveStatus, try to find ANY provider from User collection
+    if (eligibleProviders.length === 0) {
+      console.log('⚠️ No providers in LiveStatus, searching User collection directly...');
+      
+      const anyProviders = await User.aggregate([
+        {
+          $match: {
+            role: 'provider',
+            status: 'active'
+            // NO service type filter
+          }
+        },
+        {
+          $limit: 5
+        },
+        {
+          $project: {
+            _id: 1,
+            fullName: 1,
+            email: 1,
+            phoneNumber: 1,
+            serviceType: 1,
+            rating: 1,
+            totalJobsCompleted: 1
+          }
+        }
+      ]);
+
+      console.log(`✅ Found ${anyProviders.length} providers in User collection`);
+
+      if (anyProviders.length > 0) {
+        // Create temporary live status entries for these providers
+        for (const provider of anyProviders) {
+          try {
+            await ProviderLiveStatus.findOneAndUpdate(
+              { providerId: provider._id },
+              {
+                providerId: provider._id,
+                isOnline: true,
+                isAvailable: true,
+                currentLocation: {
+                  type: 'Point',
+                  coordinates: [pickup?.coordinates?.lng || 73.2731732, pickup?.coordinates?.lat || 31.4976697],
+                  address: pickup?.address || 'Default location',
+                  lastUpdated: new Date()
+                },
+                lastSeen: new Date(),
+                currentTaskId: null
+              },
+              { upsert: true }
+            );
+            console.log(`✅ Created live status for provider: ${provider.fullName}`);
+          } catch (err) {
+            console.log(`⚠️ Could not create live status for ${provider.fullName}:`, err.message);
+          }
+        }
+
+        // Add these providers to eligibleProviders array
+        eligibleProviders.push(...anyProviders.map(p => ({
+          providerId: p._id,
+          userInfo: p
+        })));
+      }
+    }
+
+    console.log(`🎯 FINAL eligible providers count: ${eligibleProviders.length}`);
 
     // Create notifications for all eligible providers
     if (eligibleProviders.length > 0) {
+      console.log('📨 Creating notifications for providers...');
+      
       const notificationPromises = eligibleProviders.map(async (provider) => {
-        const notification = new Notification({
-          userId: provider.providerId,
-          type: 'NEW_JOB_REQUEST',
-          title: 'New Service Request',
-          message: `${serviceName} - ${pickup?.address?.substring(0, 50)}...`,
-          data: {
-            jobId: job._id.toString(),
-            jobNumber: job.jobNumber,
-            serviceType: serviceCategory,
-            serviceName: serviceName,
-            price: payment?.totalAmount || servicePrice,
-            pickupAddress: pickup?.address,
-            // REMOVED: distance calculation
-            customerName: customer?.name || 'Customer',
-            timestamp: new Date().toISOString()
-          }
-        });
-        
-        return notification.save();
+        try {
+          const notification = new Notification({
+            userId: provider.providerId || provider._id,
+            type: 'NEW_JOB_REQUEST',
+            title: 'New Service Request',
+            message: `${serviceName} - ${pickup?.address?.substring(0, 50)}...`,
+            data: {
+              jobId: job._id.toString(),
+              jobNumber: job.jobNumber,
+              serviceType: serviceCategory,
+              serviceName: serviceName,
+              price: payment?.totalAmount || servicePrice,
+              pickupAddress: pickup?.address,
+              customerName: customer?.name || 'Customer',
+              timestamp: new Date().toISOString(),
+              // Add a flag that this is for testing
+              isTestMode: true
+            }
+          });
+          
+          return notification.save();
+        } catch (err) {
+          console.log(`⚠️ Failed to create notification for provider:`, err.message);
+          return null;
+        }
       });
 
-      await Promise.allSettled(notificationPromises);
-      console.log(`✅ Created ${eligibleProviders.length} notifications`);
+      const results = await Promise.allSettled(notificationPromises);
+      const successful = results.filter(r => r.status === 'fulfilled' && r.value).length;
+      console.log(`✅ Created ${successful} out of ${eligibleProviders.length} notifications`);
+    } else {
+      console.log('⚠️ NO PROVIDERS FOUND IN SYSTEM!');
+      
+      // Return a more helpful message
+      return res.status(200).json({
+        success: true,
+        message: 'No providers available in the system',
+        bookingId: job._id,
+        jobNumber: job.jobNumber,
+        status: job.status,
+        providersFound: 0,
+        estimatedWaitTime: 'Unknown',
+        debug: {
+          hasLiveStatusEntries: await ProviderLiveStatus.countDocuments(),
+          totalProviders: await User.countDocuments({ role: 'provider' }),
+          activeProviders: await User.countDocuments({ role: 'provider', status: 'active' })
+        }
+      });
     }
 
     // Return response to customer
@@ -611,33 +707,19 @@ export const findProvider = async (req, res) => {
       jobNumber: job.jobNumber,
       status: job.status,
       providersFound: eligibleProviders.length,
-      estimatedWaitTime: eligibleProviders.length > 0 ? '30-60 seconds' : '2-3 minutes'
+      estimatedWaitTime: eligibleProviders.length > 0 ? '30-60 seconds' : '2-3 minutes',
+      debug: {
+        providersList: eligibleProviders.map(p => ({
+          name: p.userInfo?.fullName || 'Unknown',
+          serviceTypes: p.userInfo?.serviceType || []
+        }))
+      }
     });
 
   } catch (error) {
     console.error('❌ Error in findProvider:', error);
     console.error('Error stack:', error.stack);
     
-    if (error.name === 'ValidationError') {
-      const validationErrors = {};
-      Object.keys(error.errors).forEach(key => {
-        validationErrors[key] = error.errors[key].message;
-      });
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: validationErrors
-      });
-    }
-
-    if (error.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message: 'Duplicate job number - please try again',
-        error: error.message
-      });
-    }
-
     return res.status(500).json({
       success: false,
       message: 'Failed to process request',
@@ -645,7 +727,6 @@ export const findProvider = async (req, res) => {
     });
   }
 };
-
 
 
 
