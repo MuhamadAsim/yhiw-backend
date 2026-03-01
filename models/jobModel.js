@@ -1,4 +1,3 @@
-// models/jobModel.js - Alternative version
 import mongoose from 'mongoose';
 
 const locationSchema = new mongoose.Schema({
@@ -17,7 +16,7 @@ const locationSchema = new mongoose.Schema({
 }, { _id: false });
 
 const jobSchema = new mongoose.Schema({
-  // ... all your schema fields (same as above) ...
+  // IDs
   jobNumber: {
     type: String,
     unique: true,
@@ -26,13 +25,15 @@ const jobSchema = new mongoose.Schema({
   providerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: false
+    required: false  // Important: false because it's assigned later
   },
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
+
+  // Job Details
   title: {
     type: String,
     required: true
@@ -41,15 +42,26 @@ const jobSchema = new mongoose.Schema({
     type: String,
     required: true,
     enum: [
-      'Towing', 'Roadside Assistance', 'Fuel Delivery', 'Battery Replacement',
-      'AC Gas Refill', 'Tire Replacement', 'Oil Change', 'Inspection / Repair',
-      'Car Wash', 'Car Detailing', 'Car Rental', 'Spare Parts'
+      'Towing',
+      'Roadside Assistance',
+      'Fuel Delivery',
+      'Battery Replacement',
+      'AC Gas Refill',
+      'Tire Replacement',
+      'Oil Change',
+      'Inspection / Repair',
+      'Car Wash',
+      'Car Detailing',
+      'Car Rental',
+      'Spare Parts'
     ]
   },
   description: {
     type: String,
     maxLength: 500
   },
+
+  // Pricing
   price: {
     type: Number,
     required: true,
@@ -65,6 +77,8 @@ const jobSchema = new mongoose.Schema({
     enum: ['pending', 'paid', 'failed'],
     default: 'pending'
   },
+
+  // Locations
   pickupLocation: {
     type: locationSchema,
     required: true
@@ -72,14 +86,25 @@ const jobSchema = new mongoose.Schema({
   dropoffLocation: {
     type: locationSchema
   },
+
+  // Status and Timeline
   status: {
     type: String,
     enum: [
-      'pending', 'accepted', 'en-route', 'arrived', 'in-progress',
-      'completed', 'cancelled', 'expired', 'no-show'
+      'pending',      // Customer requested, waiting for provider acceptance
+      'accepted',      // Provider accepted
+      'en-route',      // Provider on the way to pickup
+      'arrived',       // Provider arrived at pickup
+      'in-progress',   // Service in progress
+      'completed',     // Job completed successfully
+      'cancelled',     // Job cancelled
+      'expired',       // Job expired (no provider found within 5 mins)
+      'no-show'        // Customer didn't show up
     ],
     default: 'pending'
   },
+
+  // Timestamps for each stage
   requestedAt: {
     type: Date,
     default: Date.now
@@ -95,19 +120,25 @@ const jobSchema = new mongoose.Schema({
     enum: ['customer', 'provider']
   },
   cancellationReason: String,
-  expiredAt: Date,
+  expiredAt: Date,  // When job expired (no provider found)
+
+  // Duration tracking
   estimatedDuration: {
-    type: Number,
+    type: Number, // in minutes
     default: 30
   },
   actualDuration: {
-    type: Number,
+    type: Number, // in minutes
     default: 0
   },
+
+  // Distance tracking
   distance: {
-    type: Number,
+    type: Number, // in km
     default: 0
   },
+
+  // Customer feedback
   customerRating: {
     type: Number,
     min: 0,
@@ -118,10 +149,14 @@ const jobSchema = new mongoose.Schema({
     maxLength: 500
   },
   reviewSubmittedAt: Date,
+
+  // Provider notes
   providerNotes: {
     type: String,
     maxLength: 500
   },
+
+  // For dispute handling
   isDisputed: {
     type: Boolean,
     default: false
@@ -129,55 +164,37 @@ const jobSchema = new mongoose.Schema({
   disputeReason: String,
   disputeResolvedAt: Date,
   disputeResolution: String,
+
+  // Metadata field for additional data
   metadata: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
+
+  // TTL index field - this is what auto-deletes documents
   expireAt: {
     type: Date,
-    default: null
+    default: null,
+    index: { expires: 0 } // This tells MongoDB to delete when this time is reached
   }
+
 }, {
   timestamps: true
 });
 
-// ============== FIX: Use regular function with explicit this binding ==============
-// This is the most reliable approach for ES modules
-jobSchema.pre('save', function(next) {
-  // Use regular function, not arrow function
-  // 'this' refers to the document being saved
-  
-  console.log('📝 Running pre-save hook for job:', this.jobNumber);
-  
-  try {
-    // If this is a new pending job, set expireAt to 5 minutes from now
-    if (this.isNew && this.status === 'pending') {
-      const fiveMinutesFromNow = new Date();
-      fiveMinutesFromNow.setMinutes(fiveMinutesFromNow.getMinutes() + 5);
-      this.expireAt = fiveMinutesFromNow;
-      console.log(`⏰ Job ${this.jobNumber} will expire at:`, fiveMinutesFromNow);
-    }
-    
-    // If job status changes from pending to something else, remove expiration
-    if (!this.isNew && this.isModified('status') && this.status !== 'pending') {
-      this.expireAt = null;
-      console.log(`⏰ Expiration removed for job ${this.jobNumber} as status changed to ${this.status}`);
-    }
-    
-    next();
-  } catch (error) {
-    console.error('❌ Error in pre-save hook:', error);
-    next(error);
-  }
-});
 
-// Create indexes
-jobSchema.index({ jobNumber: 1 }, { unique: true });
+// Indexes for better query performance
 jobSchema.index({ providerId: 1, createdAt: -1 });
 jobSchema.index({ customerId: 1, createdAt: -1 });
 jobSchema.index({ status: 1 });
-jobSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 });
+jobSchema.index({ jobNumber: 1 }, { unique: true });
+jobSchema.index({ completedAt: 1 });
+jobSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
+jobSchema.index({ 'pickupLocation.latitude': 1, 'pickupLocation.longitude': 1 });
+
+
 
 const Job = mongoose.model('Job', jobSchema);
+
 
 export default Job;
