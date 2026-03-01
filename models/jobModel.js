@@ -1,3 +1,4 @@
+// models/jobModel.js
 import mongoose from 'mongoose';
 
 const locationSchema = new mongoose.Schema({
@@ -182,23 +183,36 @@ const jobSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// ============== FIXED PRE-SAVE HOOK ==============
 // Pre-save hook to set expireAt for pending jobs
 jobSchema.pre('save', function(next) {
-  // If this is a new pending job, set expireAt to 5 minutes from now
-  if (this.isNew && this.status === 'pending') {
-    const fiveMinutesFromNow = new Date();
-    fiveMinutesFromNow.setMinutes(fiveMinutesFromNow.getMinutes() + 5);
-    this.expireAt = fiveMinutesFromNow;
+  try {
+    console.log('📝 Running pre-save hook for job:', this.jobNumber);
+    
+    // If this is a new pending job, set expireAt to 5 minutes from now
+    if (this.isNew && this.status === 'pending') {
+      const fiveMinutesFromNow = new Date();
+      fiveMinutesFromNow.setMinutes(fiveMinutesFromNow.getMinutes() + 5);
+      this.expireAt = fiveMinutesFromNow;
+      console.log(`⏰ Job ${this.jobNumber} will expire at:`, fiveMinutesFromNow);
+    }
+    
+    // If job status changes from pending to something else, remove expiration
+    if (!this.isNew && this.isModified('status') && this.status !== 'pending') {
+      this.expireAt = null;
+      console.log(`⏰ Expiration removed for job ${this.jobNumber} as status changed to ${this.status}`);
+    }
+    
+    // IMPORTANT: Call next() to proceed
+    return next();
+  } catch (error) {
+    console.error('❌ Error in pre-save hook:', error);
+    // Pass error to next to trigger error handling
+    return next(error);
   }
-  
-  // If job status changes from pending to something else, remove expiration
-  if (!this.isNew && this.isModified('status') && this.status !== 'pending') {
-    this.expireAt = null;
-  }
-  
-  next();
 });
 
+// ============== FIXED INDEXES ==============
 // Indexes for better query performance
 jobSchema.index({ providerId: 1, createdAt: -1 });
 jobSchema.index({ customerId: 1, createdAt: -1 });
@@ -208,21 +222,71 @@ jobSchema.index({ completedAt: 1 });
 jobSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
 jobSchema.index({ 'pickupLocation.latitude': 1, 'pickupLocation.longitude': 1 });
 
+// ============== STATIC METHODS ==============
 // Static method to manually cleanup expired jobs (as backup)
 jobSchema.statics.cleanupExpiredJobs = async function() {
-  const result = await this.deleteMany({
-    status: 'pending',
-    requestedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } // Older than 5 minutes
-  });
-  console.log(`🧹 Cleaned up ${result.deletedCount} expired pending jobs`);
-  return result;
+  try {
+    const result = await this.deleteMany({
+      status: 'pending',
+      requestedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } // Older than 5 minutes
+    });
+    console.log(`🧹 Cleaned up ${result.deletedCount} expired pending jobs`);
+    return result;
+  } catch (error) {
+    console.error('❌ Error cleaning up expired jobs:', error);
+    throw error;
+  }
 };
 
+// ============== INSTANCE METHODS ==============
+// Method to check if job is expired
+jobSchema.methods.isExpired = function() {
+  return this.status === 'pending' && 
+         this.expireAt && 
+         new Date() > this.expireAt;
+};
+
+// Method to expire the job manually
+jobSchema.methods.expire = async function() {
+  this.status = 'expired';
+  this.expiredAt = new Date();
+  this.expireAt = null;
+  return this.save();
+};
+
+// Method to accept job
+jobSchema.methods.accept = async function(providerId) {
+  this.providerId = providerId;
+  this.status = 'accepted';
+  this.acceptedAt = new Date();
+  this.expireAt = null; // Remove expiration
+  return this.save();
+};
+
+// Method to cancel job
+jobSchema.methods.cancel = async function(cancelledBy, reason) {
+  this.status = 'cancelled';
+  this.cancelledAt = new Date();
+  this.cancelledBy = cancelledBy;
+  this.cancellationReason = reason;
+  this.expireAt = null; // Remove expiration
+  return this.save();
+};
+
+// Create the model
 const Job = mongoose.model('Job', jobSchema);
 
-// Optional: Run cleanup every minute as backup if TTL doesn't work
-// setInterval(async () => {
-//   await Job.cleanupExpiredJobs();
-// }, 60 * 1000); // Every minute
+// ============== OPTIONAL: BACKGROUND CLEANUP ==============
+// Run cleanup every minute as backup if TTL doesn't work
+// Uncomment if you want this as additional safety
+/*
+setInterval(async () => {
+  try {
+    await Job.cleanupExpiredJobs();
+  } catch (error) {
+    console.error('❌ Background cleanup error:', error);
+  }
+}, 60 * 1000); // Every minute
+*/
 
 export default Job;
