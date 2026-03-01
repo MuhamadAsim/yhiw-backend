@@ -430,10 +430,8 @@ const generateJobNumber = () => {
 
 
 
-// Add near the top of jobController.js
-import { wsManager } from '../app.js';
+// controllers/jobController.js - Simplified findProvider for testing
 
-// Then update your findProvider controller to use WebSocket
 export const findProvider = async (req, res) => {
   try {
     console.log('='.repeat(50));
@@ -448,14 +446,8 @@ export const findProvider = async (req, res) => {
       servicePrice,
       serviceCategory,
       serviceType,
-      isCarRental,
-      isFuelDelivery,
-      isSpareParts,
       vehicle,
       customer,
-      carRental,
-      fuelDelivery,
-      spareParts,
       additionalDetails,
       schedule,
       payment,
@@ -474,45 +466,34 @@ export const findProvider = async (req, res) => {
     }
 
     // Generate unique job number
-    const jobNumber = generateJobNumber();
+    const jobNumber = `JOB-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     console.log('Generated job number:', jobNumber);
 
     // Create the job in database with 'pending' status
     const job = new Job({
       jobNumber,
       customerId,
-      
       title: serviceName,
       serviceType: serviceCategory,
       description: additionalDetails?.description || '',
-      
       price: payment?.totalAmount || parseFloat(servicePrice) || 0,
       paymentMethod: payment?.paymentMethod || 'cash',
       paymentStatus: 'pending',
-      
       pickupLocation: {
         latitude: pickup?.coordinates?.lat || 0,
         longitude: pickup?.coordinates?.lng || 0,
-        address: pickup?.address || ''
+        address: pickup?.address || 'Pickup location'
       },
       dropoffLocation: dropoff?.address ? {
         latitude: dropoff?.coordinates?.lat || 0,
         longitude: dropoff?.coordinates?.lng || 0,
-        address: dropoff?.address || ''
+        address: dropoff?.address
       } : undefined,
-      
       status: 'pending',
       requestedAt: new Date(),
-      
-      // Store additional metadata
       metadata: {
         vehicle,
         customer,
-        serviceSpecific: {
-          carRental,
-          fuelDelivery,
-          spareParts
-        },
         additionalDetails,
         schedule,
         locationSkipped,
@@ -524,54 +505,38 @@ export const findProvider = async (req, res) => {
     await job.save();
     console.log('✅ Job saved successfully with ID:', job._id);
 
-    // FIND PROVIDERS (your existing logic)
-    console.log('🔍 Searching for providers...');
+    // SIMPLIFIED: Get ALL providers (no filters for testing)
+    console.log('🔍 Getting ALL providers for testing...');
     
-    const eligibleProviders = await ProviderLiveStatus.aggregate([
-      {
-        $match: {}
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'providerId',
-          foreignField: '_id',
-          as: 'userInfo'
-        }
-      },
-      {
-        $unwind: {
-          path: '$userInfo',
-          preserveNullAndEmptyArrays: false
-        }
-      },
-      {
-        $match: {
-          'userInfo.role': 'provider',
-          'userInfo.status': 'active'
-        }
-      },
-      {
-        $limit: 10
-      },
-      {
-        $project: {
-          providerId: 1,
-          'userInfo.fullName': 1,
-          'userInfo.firebaseUserId': 1,
-          'userInfo.rating': 1,
-          'userInfo.totalJobsCompleted': 1,
-          'userInfo.profileImage': 1,
-          'userInfo.serviceType': 1,
-          'currentLocation': 1,
-          isOnline: 1,
-          isAvailable: 1,
-          lastSeen: 1
-        }
-      }
-    ]);
+    // First, get all provider users
+    const allProviders = await User.find({ role: 'provider' }).select('_id firebaseUserId fullName');
+    console.log(`✅ Found ${allProviders.length} total providers in system`);
 
-    console.log(`✅ Found ${eligibleProviders.length} providers`);
+    // Get their live status
+    const eligibleProviders = [];
+    
+    for (const provider of allProviders) {
+      // Check if they have live status
+      const liveStatus = await ProviderLiveStatus.findOne({ 
+        providerId: provider._id 
+      });
+      
+      eligibleProviders.push({
+        providerId: provider._id,
+        userInfo: {
+          firebaseUserId: provider.firebaseUserId,
+          fullName: provider.fullName,
+          rating: provider.rating || 4.5,
+          totalJobsCompleted: provider.totalJobsCompleted || 0,
+          profileImage: provider.profileImage || ''
+        },
+        isOnline: liveStatus?.isOnline || false,
+        isAvailable: liveStatus?.isAvailable || true,
+        currentLocation: liveStatus?.currentLocation || null
+      });
+    }
+
+    console.log(`✅ Found ${eligibleProviders.length} providers to notify`);
 
     // Prepare job data for WebSocket
     const jobRequestData = {
@@ -580,19 +545,21 @@ export const findProvider = async (req, res) => {
       serviceType: serviceCategory,
       serviceName: serviceName,
       price: payment?.totalAmount || servicePrice,
-      pickupLocation: pickup?.address,
-      dropoffLocation: dropoff?.address,
+      pickupLocation: pickup?.address || 'Pickup location',
+      dropoffLocation: dropoff?.address || null,
       customerName: customer?.name || 'Customer',
-      distance: 'Calculating...',
+      distance: '0',
       estimatedEarnings: payment?.totalAmount || servicePrice,
       timestamp: new Date().toISOString(),
-      vehicle: vehicle,
-      additionalDetails: additionalDetails
+      vehicle: vehicle || {},
+      additionalDetails: additionalDetails || {}
     };
 
-    // Send via WebSocket to all eligible providers
+    // Send via WebSocket to all providers
     const wsManager = req.app.get('wsManager');
-    const providerIds = eligibleProviders.map(p => p.userInfo.firebaseUserId);
+    const providerIds = eligibleProviders
+      .map(p => p.userInfo?.firebaseUserId)
+      .filter(id => id); // Remove any null/undefined
     
     if (providerIds.length > 0) {
       const sentCount = wsManager.sendJobRequestToProviders(jobRequestData, providerIds);
@@ -609,10 +576,9 @@ export const findProvider = async (req, res) => {
             userId: provider.providerId,
             type: 'NEW_JOB_REQUEST',
             title: 'New Service Request',
-            message: `${serviceName} - ${pickup?.address?.substring(0, 50)}...`,
+            message: `${serviceName} - ${pickup?.address?.substring(0, 50) || 'New job'}...`,
             data: jobRequestData
           });
-          
           return notification.save();
         } catch (err) {
           console.log(`⚠️ Failed to create notification:`, err.message);
@@ -621,17 +587,8 @@ export const findProvider = async (req, res) => {
       });
 
       await Promise.allSettled(notificationPromises);
-      console.log(`✅ Created ${eligibleProviders.length} notifications`);
+      console.log(`✅ Created notifications`);
     }
-
-    // Subscribe customer to job updates
-    setTimeout(() => {
-      // Give WebSocket time to connect
-      wsManager.sendToUser(customerId, {
-        type: 'subscribe_to_job',
-        data: { jobId: job._id.toString() }
-      });
-    }, 1000);
 
     // Return response to customer
     return res.status(200).json({
@@ -656,7 +613,6 @@ export const findProvider = async (req, res) => {
     });
   }
 };
-
 
 
 
@@ -746,11 +702,19 @@ export const getJobDetailsForProvider = async (req, res) => {
     });
   }
 };
-// Update the acceptJob controller to notify via WebSocket
+
+
+// controllers/jobController.js - Updated acceptJob
+
 export const acceptJob = async (req, res) => {
   try {
     const { jobId } = req.params;
     const providerId = req.user.id;
+
+    console.log('='.repeat(50));
+    console.log('✅ ACCEPT JOB CONTROLLER STARTED');
+    console.log('Job ID:', jobId);
+    console.log('Provider ID:', providerId);
 
     // Start a session for transaction
     const session = await mongoose.startSession();
@@ -791,7 +755,7 @@ export const acceptJob = async (req, res) => {
         });
       }
 
-      // Update provider status to unavailable
+      // Update provider status
       await ProviderLiveStatus.findOneAndUpdate(
         { providerId },
         {
@@ -799,33 +763,42 @@ export const acceptJob = async (req, res) => {
           currentTaskId: job._id,
           lastSeen: new Date()
         },
-        { session }
+        { session, upsert: true }
       );
 
       await session.commitTransaction();
       session.endSession();
 
       // Get provider info
-      const provider = await User.findById(providerId).select('fullName rating profileImage');
+      const provider = await User.findById(providerId).select('fullName rating profileImage firebaseUserId');
 
-      // Send WebSocket notification to customer
+      console.log('Provider info:', provider);
+      console.log('Customer firebaseUserId:', job.customerId?.firebaseUserId);
+
+      // Send WebSocket notification to customer - USING THE CORRECT EVENT TYPE
       const wsManager = req.app.get('wsManager');
       if (job.customerId?.firebaseUserId) {
-        wsManager.sendToUser(job.customerId.firebaseUserId, {
-          type: 'provider_assigned',
+        const messageData = {
+          type: 'job_accepted', // This matches what frontend listens for
           data: {
             jobId: job._id.toString(),
+            bookingId: job._id.toString(),
             jobNumber: job.jobNumber,
-            provider: {
-              id: providerId,
-              name: provider.fullName,
-              rating: provider.rating,
-              profileImage: provider.profileImage
-            },
+            providerId: provider.firebaseUserId || providerId.toString(),
+            providerName: provider.fullName,
+            providerRating: provider.rating || 4.5,
+            providerImage: provider.profileImage || '',
             estimatedArrival: '10-15 minutes',
-            status: 'accepted'
+            vehicleDetails: 'Service vehicle',
+            status: 'accepted',
+            acceptedAt: new Date().toISOString()
           }
-        });
+        };
+        
+        console.log('📨 Sending WebSocket message to customer:', JSON.stringify(messageData, null, 2));
+        
+        const sent = wsManager.sendToUser(job.customerId.firebaseUserId, messageData);
+        console.log('WebSocket send result:', sent ? '✅ Sent' : '❌ Failed');
       }
 
       // Create notification as backup
@@ -834,7 +807,7 @@ export const acceptJob = async (req, res) => {
           userId: job.customerId._id,
           type: 'JOB_ACCEPTED',
           title: 'Provider Found!',
-          message: `${provider.fullName} has accepted your request and is on the way`,
+          message: `${provider.fullName} has accepted your request`,
           data: {
             jobId: job._id.toString(),
             jobNumber: job.jobNumber,
@@ -844,6 +817,7 @@ export const acceptJob = async (req, res) => {
           }
         });
         await notification.save();
+        console.log('✅ Backup notification created');
       }
 
       return res.status(200).json({
@@ -853,8 +827,7 @@ export const acceptJob = async (req, res) => {
           jobId: job._id,
           jobNumber: job.jobNumber,
           status: job.status,
-          customerLocation: job.pickupLocation,
-          customerPhone: job.customerId?.phoneNumber
+          customerLocation: job.pickupLocation
         }
       });
 
@@ -865,7 +838,7 @@ export const acceptJob = async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Error accepting job:', error);
+    console.error('❌ Error accepting job:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to accept job',
