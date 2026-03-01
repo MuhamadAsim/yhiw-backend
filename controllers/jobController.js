@@ -1,9 +1,15 @@
-// jobController.js - Cleaned up with WebSocket integration
+// jobController.js - Complete updated version with Google Maps integration
 import Job from '../models/jobModel.js';
 import User from '../models/userModel.js';
 import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
 import mongoose from 'mongoose';
 import Notification from '../models/notificationModel.js';
+import dotenv from 'dotenv';
+dotenv.config();
+
+// Google Maps API Key from environment variables
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+
 
 // ==================== PROVIDER JOB CONTROLLERS ====================
 
@@ -189,7 +195,7 @@ const getTimeAgo = (date) => {
   return `${Math.floor(diffMinutes / 1440)} days ago`;
 };
 
-// Calculate distance between two coordinates (km)
+// Calculate distance between two coordinates using Haversine formula (fallback)
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
   if (!lat1 || !lon1 || !lat2 || !lon2) return null;
   
@@ -204,9 +210,35 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return Math.round(R * c * 10) / 10; // Distance in km with 1 decimal
 };
 
+// Get distance from Google Maps API (more accurate)
+const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => {
+  try {
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.log('Google Maps API key not found, using Haversine formula');
+      return calculateDistance(originLat, originLng, destLat, destLng);
+    }
+
+    const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${GOOGLE_MAPS_API_KEY}&units=metric`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
+      const distanceInMeters = data.rows[0].elements[0].distance.value;
+      return Math.round(distanceInMeters / 100) / 10; // Convert to km with 1 decimal
+    } else {
+      console.log('Google Maps API error, falling back to Haversine');
+      return calculateDistance(originLat, originLng, destLat, destLng);
+    }
+  } catch (error) {
+    console.error('Error getting Google Maps distance:', error);
+    return calculateDistance(originLat, originLng, destLat, destLng);
+  }
+};
+
 // ==================== CUSTOMER JOB CONTROLLERS ====================
 
-// Main controller for customer finding a provider - UPDATED with WebSocket
+// Main controller for customer finding a provider - UPDATED with WebSocket and Google Maps
 export const findProvider = async (req, res) => {
   try {
     console.log('='.repeat(50));
@@ -337,47 +369,67 @@ export const findProvider = async (req, res) => {
       description: additionalDetails?.description
     };
 
-    // Calculate distance for each provider and send via WebSocket
+    // Calculate distance for each provider using Google Maps and send via WebSocket
     const wsManager = req.app.get('wsManager');
     let sentCount = 0;
 
     if (eligibleProviders.length > 0) {
-      // Add distance to each provider
-      const providersWithDistance = eligibleProviders.map(provider => {
-        if (provider.currentLocation?.coordinates && pickup?.coordinates) {
-          const distance = calculateDistance(
-            pickup.coordinates.lat,
-            pickup.coordinates.lng,
-            provider.currentLocation.coordinates[1],
-            provider.currentLocation.coordinates[0]
-          );
+      // Add distance to each provider using Google Maps
+      const providersWithDistance = await Promise.all(
+        eligibleProviders.map(async (provider) => {
+          if (provider.currentLocation?.coordinates && pickup?.coordinates) {
+            const distance = await getGoogleMapsDistance(
+              pickup.coordinates.lat,
+              pickup.coordinates.lng,
+              provider.currentLocation.coordinates[1],
+              provider.currentLocation.coordinates[0]
+            );
+            return {
+              ...provider,
+              distance: distance ? `${distance} km` : 'Calculating...',
+              distanceValue: distance
+            };
+          }
           return {
             ...provider,
-            distance: distance || 'Calculating...'
+            distance: 'Location unavailable',
+            distanceValue: null
           };
-        }
-        return provider;
-      });
+        })
+      );
 
       // Send job request to all eligible providers
       const providerIds = providersWithDistance.map(p => p.userInfo.firebaseUserId).filter(Boolean);
       
       if (providerIds.length > 0) {
-        sentCount = wsManager.sendJobRequestToProviders({
-          ...jobRequestData,
-          // Add provider-specific distance when sending individually
-        }, providerIds);
+        // Send individual messages with provider-specific distance
+        providerIds.forEach((providerId, index) => {
+          const providerData = providersWithDistance[index];
+          const providerSpecificData = {
+            ...jobRequestData,
+            distance: providerData.distance,
+            providerSpecific: {
+              distance: providerData.distance,
+              distanceValue: providerData.distanceValue,
+              providerId: providerData.providerId
+            }
+          };
+          
+          wsManager.sendToUser(providerId, {
+            type: 'new_job_request',
+            data: providerSpecificData
+          });
+        });
         
-        console.log(`📨 Sent job request to ${sentCount} providers via WebSocket`);
+        console.log(`📨 Sent job request to ${providerIds.length} providers via WebSocket`);
+        sentCount = providerIds.length;
       }
 
       // Create notifications as backup
       console.log('📨 Creating notifications as backup...');
       
-      const notificationPromises = eligibleProviders.map(async (provider) => {
+      const notificationPromises = providersWithDistance.map(async (provider) => {
         try {
-          const distance = provider.distance || 'Calculating...';
-          
           const notification = new Notification({
             userId: provider.providerId,
             type: 'NEW_JOB_REQUEST',
@@ -385,9 +437,10 @@ export const findProvider = async (req, res) => {
             message: `${serviceName} - ${pickup?.address?.substring(0, 50)}...`,
             data: {
               ...jobRequestData,
-              distance: distance,
+              distance: provider.distance,
               providerSpecific: {
-                distance: distance,
+                distance: provider.distance,
+                distanceValue: provider.distanceValue,
                 providerId: provider.providerId
               }
             }
@@ -559,7 +612,7 @@ const findNearbyProviders = async (lat, lng, serviceCategory) => {
         {
           $project: {
             providerId: 1,
-            distance: 1,
+            distance: { $divide: ['$distance', 1000] }, // Convert to km
             'userInfo.fullName': 1,
             'userInfo.firebaseUserId': 1,
             'userInfo.rating': 1,
@@ -651,7 +704,7 @@ const findNearbyProviders = async (lat, lng, serviceCategory) => {
 
 // ==================== PROVIDER JOB ACTION CONTROLLERS ====================
 
-// Controller for provider to get job details when they click notification - KEPT as fallback
+// Controller for provider to get job details when they click notification - UPDATED with Google Maps
 export const getJobDetailsForProvider = async (req, res) => {
   try {
     const { jobId } = req.params;
@@ -677,18 +730,19 @@ export const getJobDetailsForProvider = async (req, res) => {
       });
     }
 
-    // Calculate distance from provider to pickup
+    // Calculate distance from provider to pickup using Google Maps
     let distance = 'Calculating...';
     const providerLocation = await ProviderLiveStatus.findOne({ providerId });
     
     if (providerLocation?.currentLocation?.coordinates && job.pickupLocation) {
-      const dist = calculateDistance(
+      // Use Google Maps API for accurate distance
+      const dist = await getGoogleMapsDistance(
         job.pickupLocation.latitude,
         job.pickupLocation.longitude,
         providerLocation.currentLocation.coordinates[1],
         providerLocation.currentLocation.coordinates[0]
       );
-      if (dist) distance = `${dist} km`;
+      distance = dist ? `${dist} km` : 'Calculating...';
     }
 
     // Format response for provider
@@ -747,7 +801,7 @@ export const getJobDetailsForProvider = async (req, res) => {
   }
 };
 
-// Accept job controller - UPDATED with WebSocket notification
+// Accept job controller - UPDATED with WebSocket notification and Google Maps ETA
 export const acceptJob = async (req, res) => {
   try {
     const { jobId } = req.params;
@@ -809,10 +863,31 @@ export const acceptJob = async (req, res) => {
       // Get provider info
       const provider = await User.findById(providerId).select('fullName rating profileImage firebaseUserId');
 
+      // Calculate ETA using Google Maps
+      let eta = '10-15 minutes';
+      
+      if (GOOGLE_MAPS_API_KEY && job.pickupLocation) {
+        try {
+          const providerLocation = await ProviderLiveStatus.findOne({ providerId });
+          if (providerLocation?.currentLocation?.coordinates) {
+            const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLocation.currentLocation.coordinates[1]},${providerLocation.currentLocation.coordinates[0]}&destinations=${job.pickupLocation.latitude},${job.pickupLocation.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
+            
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
+              eta = data.rows[0].elements[0].duration.text;
+            }
+          }
+        } catch (error) {
+          console.error('Error getting ETA:', error);
+        }
+      }
+
       // Send WebSocket notifications
       const wsManager = req.app.get('wsManager');
       
-      // 1. Notify customer
+      // 1. Notify customer with accurate ETA
       if (job.customerId?.firebaseUserId) {
         wsManager.sendToUser(job.customerId.firebaseUserId, {
           type: 'provider_assigned',
@@ -823,7 +898,7 @@ export const acceptJob = async (req, res) => {
             providerName: provider.fullName,
             providerRating: provider.rating,
             providerImage: provider.profileImage,
-            estimatedArrival: '10-15 minutes',
+            estimatedArrival: eta,
             status: 'accepted'
           }
         });
@@ -864,7 +939,8 @@ export const acceptJob = async (req, res) => {
           jobNumber: job.jobNumber,
           status: job.status,
           customerLocation: job.pickupLocation,
-          customerPhone: job.customerId?.phoneNumber
+          customerPhone: job.customerId?.phoneNumber,
+          estimatedArrival: eta
         }
       });
 
@@ -884,13 +960,12 @@ export const acceptJob = async (req, res) => {
   }
 };
 
-
+// Decline job controller
 export const declineJob = async (req, res) => {
   try {
     const { jobId } = req.params;
     const providerId = req.user.id;
     
-    // Just log the decline, no need to update job
     console.log(`Provider ${providerId} declined job ${jobId}`);
     
     // Notify via WebSocket
@@ -908,6 +983,7 @@ export const declineJob = async (req, res) => {
       message: 'Job declined'
     });
   } catch (error) {
+    console.error('Error declining job:', error);
     res.status(500).json({
       success: false,
       message: error.message

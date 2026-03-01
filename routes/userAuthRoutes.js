@@ -3,9 +3,13 @@ import {
   createUser,
   getUserByFirebaseId,
   updateUser,
-  deleteAllUsers,
-  printAllUsers
+
 } from '../controllers/userAuthController.js';
+
+import { authenticateToken } from '../middleware/auth.js';
+
+
+
 
 const router = express.Router();
 
@@ -14,8 +18,12 @@ router.post('/', createUser); // Signup
 router.get('/:firebaseUserId', getUserByFirebaseId); // Signin
 
 
+
+router.use(authenticateToken);
+
 // Protected routes (add authentication middleware later)
 router.put('/:firebaseUserId', updateUser); // Update profile
+
 
 
 

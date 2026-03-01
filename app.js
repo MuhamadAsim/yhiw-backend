@@ -29,6 +29,10 @@ import jobRoutes from "./routes/jobRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import websocketRoutes from "./routes/websocketRoutes.js";
 
+
+
+
+
 app.use("/api/users", userAuthRoutes);
 app.use("/api/customer", customerRoutes);
 app.use("/api/provider", providerRoutes);
