@@ -703,8 +703,7 @@ export const getJobDetailsForProvider = async (req, res) => {
   }
 };
 
-
-// controllers/jobController.js - Updated acceptJob
+// controllers/jobController.js - Fixed acceptJob with complete data
 
 export const acceptJob = async (req, res) => {
   try {
@@ -769,36 +768,129 @@ export const acceptJob = async (req, res) => {
       await session.commitTransaction();
       session.endSession();
 
-      // Get provider info
-      const provider = await User.findById(providerId).select('fullName rating profileImage firebaseUserId');
+      // Get provider info with all details
+      const provider = await User.findById(providerId).select(
+        'fullName rating profileImage firebaseUserId phoneNumber vehicleDetails'
+      );
 
       console.log('Provider info:', provider);
       console.log('Customer firebaseUserId:', job.customerId?.firebaseUserId);
+      console.log('Job details:', {
+        pickupLocation: job.pickupLocation,
+        dropoffLocation: job.dropoffLocation,
+        metadata: job.metadata
+      });
 
-      // Send WebSocket notification to customer - USING THE CORRECT EVENT TYPE
+      // Get provider's current location if available
+      let providerLocation = null;
+      try {
+        const liveStatus = await ProviderLiveStatus.findOne({ providerId });
+        if (liveStatus && liveStatus.currentLocation) {
+          providerLocation = {
+            latitude: liveStatus.currentLocation.coordinates[1],
+            longitude: liveStatus.currentLocation.coordinates[0],
+            lastUpdate: liveStatus.currentLocation.lastUpdated
+          };
+        }
+      } catch (locError) {
+        console.error('Error getting provider location:', locError);
+      }
+
+      // Prepare complete data object with ALL fields the frontend expects
+      const providerData = {
+        // Core identifiers
+        jobId: job._id.toString(),
+        bookingId: job._id.toString(),
+        jobNumber: job.jobNumber,
+        
+        // Provider info
+        providerId: provider.firebaseUserId || providerId.toString(),
+        providerName: provider.fullName,
+        providerRating: provider.rating || 4.5,
+        providerImage: provider.profileImage || '',
+        providerPhone: provider.phoneNumber || '',
+        
+        // Service details
+        serviceType: job.serviceType,
+        serviceName: job.title || job.serviceType,
+        serviceId: job.metadata?.serviceId,
+        
+        // Pickup location - CRITICAL for navigation
+        pickupLocation: job.pickupLocation?.address || '',
+        pickupLat: job.pickupLocation?.latitude || 0,
+        pickupLng: job.pickupLocation?.longitude || 0,
+        
+        // Dropoff location (if available)
+        dropoffLocation: job.dropoffLocation?.address || '',
+        dropoffLat: job.dropoffLocation?.latitude || null,
+        dropoffLng: job.dropoffLocation?.longitude || null,
+        
+        // Job details
+        price: job.price || 0,
+        estimatedEarnings: job.price || 0,
+        distance: job.distance || 'Calculating...',
+        urgency: job.metadata?.additionalDetails?.urgency || 'normal',
+        
+        // ETA and status
+        estimatedArrival: '10-15 minutes',
+        vehicleDetails: provider.vehicleDetails || 'Service vehicle',
+        status: 'accepted',
+        acceptedAt: new Date().toISOString(),
+        
+        // Provider location for live tracking
+        providerLocation: providerLocation,
+        
+        // Customer info (for reference)
+        customerName: job.metadata?.customer?.name || 'Customer',
+        customerPhone: job.customerId?.phoneNumber || '',
+        
+        // Vehicle details from metadata
+        vehicleType: job.metadata?.vehicle?.type || '',
+        vehicleMakeModel: job.metadata?.vehicle?.makeModel || '',
+        vehicleYear: job.metadata?.vehicle?.year || '',
+        vehicleColor: job.metadata?.vehicle?.color || '',
+        vehicleLicensePlate: job.metadata?.vehicle?.licensePlate || '',
+        
+        // Additional details
+        description: job.metadata?.additionalDetails?.description || '',
+        
+        // Metadata for reference
+        metadata: job.metadata
+      };
+
+      console.log('📨 Sending to customer:', JSON.stringify(providerData, null, 2));
+
+      // Send WebSocket notification to customer
       const wsManager = req.app.get('wsManager');
       if (job.customerId?.firebaseUserId) {
+        // Send as job_accepted (primary)
         const messageData = {
-          type: 'job_accepted', // This matches what frontend listens for
-          data: {
-            jobId: job._id.toString(),
-            bookingId: job._id.toString(),
-            jobNumber: job.jobNumber,
-            providerId: provider.firebaseUserId || providerId.toString(),
-            providerName: provider.fullName,
-            providerRating: provider.rating || 4.5,
-            providerImage: provider.profileImage || '',
-            estimatedArrival: '10-15 minutes',
-            vehicleDetails: 'Service vehicle',
-            status: 'accepted',
-            acceptedAt: new Date().toISOString()
-          }
+          type: 'job_accepted',
+          data: providerData
         };
         
-        console.log('📨 Sending WebSocket message to customer:', JSON.stringify(messageData, null, 2));
-        
+        console.log('📨 Sending job_accepted message to customer:', job.customerId.firebaseUserId);
         const sent = wsManager.sendToUser(job.customerId.firebaseUserId, messageData);
-        console.log('WebSocket send result:', sent ? '✅ Sent' : '❌ Failed');
+        console.log('job_accepted send result:', sent ? '✅ Sent' : '❌ Failed');
+        
+        // Also send as provider_assigned (backup)
+        const backupMessage = {
+          type: 'provider_assigned',
+          data: providerData
+        };
+        wsManager.sendToUser(job.customerId.firebaseUserId, backupMessage);
+        console.log('provider_assigned backup sent');
+        
+        // Also send status update
+        const statusMessage = {
+          type: 'status_update',
+          data: {
+            bookingId: job._id.toString(),
+            status: 'accepted',
+            provider: providerData
+          }
+        };
+        wsManager.sendToUser(job.customerId.firebaseUserId, statusMessage);
       }
 
       // Create notification as backup
@@ -807,14 +899,8 @@ export const acceptJob = async (req, res) => {
           userId: job.customerId._id,
           type: 'JOB_ACCEPTED',
           title: 'Provider Found!',
-          message: `${provider.fullName} has accepted your request`,
-          data: {
-            jobId: job._id.toString(),
-            jobNumber: job.jobNumber,
-            providerId: providerId.toString(),
-            providerName: provider.fullName,
-            status: 'accepted'
-          }
+          message: `${provider.fullName} has accepted your request and is on the way`,
+          data: providerData
         });
         await notification.save();
         console.log('✅ Backup notification created');
@@ -827,7 +913,8 @@ export const acceptJob = async (req, res) => {
           jobId: job._id,
           jobNumber: job.jobNumber,
           status: job.status,
-          customerLocation: job.pickupLocation
+          customerLocation: job.pickupLocation,
+          customerPhone: job.customerId?.phoneNumber
         }
       });
 
@@ -846,7 +933,6 @@ export const acceptJob = async (req, res) => {
     });
   }
 };
-
 
 // Controller to check job status (for customer polling)
 export const checkJobStatus = async (req, res) => {
