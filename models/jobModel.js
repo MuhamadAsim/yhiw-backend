@@ -175,8 +175,7 @@ const jobSchema = new mongoose.Schema({
   // TTL index field - this is what auto-deletes documents
   expireAt: {
     type: Date,
-    default: null,
-    index: { expires: 0 } // This tells MongoDB to delete when this time is reached
+    default: null
   }
 
 }, {
@@ -184,8 +183,8 @@ const jobSchema = new mongoose.Schema({
 });
 
 // ============== FIXED PRE-SAVE HOOK ==============
-// Pre-save hook to set expireAt for pending jobs
-jobSchema.pre('save', function(next) {
+// Use function declaration without arrow function to preserve 'this' context
+jobSchema.pre('save', async function(next) {
   try {
     console.log('📝 Running pre-save hook for job:', this.jobNumber);
     
@@ -204,20 +203,20 @@ jobSchema.pre('save', function(next) {
     }
     
     // IMPORTANT: Call next() to proceed
-    return next();
+    next();
   } catch (error) {
     console.error('❌ Error in pre-save hook:', error);
     // Pass error to next to trigger error handling
-    return next(error);
+    next(error);
   }
 });
 
-// ============== FIXED INDEXES ==============
-// Indexes for better query performance
+// ============== INDEXES ==============
+// Create indexes after schema definition
+jobSchema.index({ jobNumber: 1 }, { unique: true });
 jobSchema.index({ providerId: 1, createdAt: -1 });
 jobSchema.index({ customerId: 1, createdAt: -1 });
 jobSchema.index({ status: 1 });
-jobSchema.index({ jobNumber: 1 }, { unique: true });
 jobSchema.index({ completedAt: 1 });
 jobSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
 jobSchema.index({ 'pickupLocation.latitude': 1, 'pickupLocation.longitude': 1 });
@@ -275,18 +274,5 @@ jobSchema.methods.cancel = async function(cancelledBy, reason) {
 
 // Create the model
 const Job = mongoose.model('Job', jobSchema);
-
-// ============== OPTIONAL: BACKGROUND CLEANUP ==============
-// Run cleanup every minute as backup if TTL doesn't work
-// Uncomment if you want this as additional safety
-/*
-setInterval(async () => {
-  try {
-    await Job.cleanupExpiredJobs();
-  } catch (error) {
-    console.error('❌ Background cleanup error:', error);
-  }
-}, 60 * 1000); // Every minute
-*/
 
 export default Job;
