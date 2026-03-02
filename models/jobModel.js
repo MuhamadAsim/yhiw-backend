@@ -155,6 +155,7 @@ const jobSchema = new mongoose.Schema({
     type: String,
     maxLength: 500
   },
+  
 
   // For dispute handling
   isDisputed: {

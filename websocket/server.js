@@ -1,7 +1,10 @@
-// websocket/server.js - Fixed version
+// websocket/server.js - Enhanced version with full tracking support
 import { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import { Server } from 'http';
+import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
+import Job from '../models/jobModel.js';
+import User from '../models/userModel.js';
 
 class WebSocketManager {
   constructor(server) {
@@ -9,8 +12,10 @@ class WebSocketManager {
     this.clients = new Map(); // socketId -> { ws, userId, userType, subscriptions }
     this.userSockets = new Map(); // userId -> Set of socketIds
     this.rooms = new Map(); // roomName -> Set of userIds
-    this.userLocations = new Map(); // userId -> { lat, lng, address, timestamp }
+    this.userLocations = new Map(); // userId -> { lat, lng, address, heading, speed, timestamp }
     this.jobViewers = new Map(); // jobId -> Set of userIds
+    this.providerCurrentJobs = new Map(); // providerId -> jobId (for quick lookup)
+    this.customerCurrentJobs = new Map(); // customerId -> jobId (for quick lookup)
     
     this.initialize();
   }
@@ -38,7 +43,8 @@ class WebSocketManager {
           ws,
           userId,
           userType,
-          subscriptions: new Set()
+          subscriptions: new Set(),
+          connectedAt: new Date().toISOString()
         });
 
         // Add to user sockets map
@@ -49,10 +55,36 @@ class WebSocketManager {
 
         console.log(`🔌 WebSocket connected: ${userType} ${userId}`);
 
+        // If provider, update online status in DB
+        if (userType === 'provider') {
+          try {
+            const provider = await User.findOne({ firebaseUserId: userId });
+            if (provider) {
+              await ProviderLiveStatus.findOneAndUpdate(
+                { providerId: provider._id },
+                { 
+                  isOnline: true, 
+                  lastSeen: new Date(),
+                  isAvailable: true
+                },
+                { upsert: true }
+              );
+            }
+          } catch (dbError) {
+            console.error('Error updating provider online status:', dbError);
+          }
+        }
+
         // Send connection confirmation
         ws.send(JSON.stringify({
           type: 'connection_established',
-          data: { socketId, userId, userType, timestamp: new Date().toISOString() }
+          data: { 
+            socketId, 
+            userId, 
+            userType, 
+            timestamp: new Date().toISOString(),
+            message: 'Connected to YHIW real-time service'
+          }
         }));
 
         // Handle incoming messages
@@ -62,7 +94,7 @@ class WebSocketManager {
 
         // Handle disconnection
         ws.on('close', () => {
-          this.handleDisconnect(socketId, userId);
+          this.handleDisconnect(socketId, userId, userType);
         });
 
         // Handle errors
@@ -88,12 +120,15 @@ class WebSocketManager {
       console.log(`📨 Message from ${client.userId} (${client.userType}):`, type);
 
       switch (type) {
+        // Subscription management
         case 'subscribe':
           this.handleSubscribe(socketId, payload);
           break;
         case 'unsubscribe':
           this.handleUnsubscribe(socketId, payload);
           break;
+        
+        // Status and location
         case 'request_status':
           this.handleStatusRequest(client, payload);
           break;
@@ -103,6 +138,11 @@ class WebSocketManager {
         case 'location_update':
           this.handleLocationUpdate(client, payload);
           break;
+        case 'request_provider_location':
+          this.handleRequestProviderLocation(client, payload);
+          break;
+        
+        // Job management
         case 'accept_job':
           this.handleAcceptJob(client, payload);
           break;
@@ -115,9 +155,31 @@ class WebSocketManager {
         case 'request_pending_jobs':
           this.handleRequestPendingJobs(client);
           break;
+        
+        // Job status updates
+        case 'en_route':
+          this.handleEnRoute(client, payload);
+          break;
+        case 'arrived':
+          this.handleArrived(client, payload);
+          break;
+        case 'start_service':
+          this.handleStartService(client, payload);
+          break;
+        case 'complete_service':
+          this.handleCompleteService(client, payload);
+          break;
+        
+        // Tracking
+        case 'start_tracking':
+          this.handleStartTracking(client, payload);
+          break;
+        case 'stop_tracking':
+          this.handleStopTracking(client, payload);
+          break;
+        
         default:
           console.log('Unknown message type:', type);
-          // Send error back to client
           this.sendToUser(client.userId, {
             type: 'error',
             data: { message: `Unknown message type: ${type}` }
@@ -141,7 +203,6 @@ class WebSocketManager {
     
     console.log(`✅ ${client.userId} subscribed to ${room}`);
     
-    // Confirm subscription
     this.sendToUser(client.userId, {
       type: 'subscribed',
       data: { room }
@@ -160,11 +221,14 @@ class WebSocketManager {
   }
 
   handleStatusRequest(client, { bookingId }) {
-    // This would typically query the database and send status
-    // For now, just acknowledge
+    // This would query the database and send status
     this.sendToUser(client.userId, {
       type: 'status_update',
-      data: { bookingId, status: 'searching', timestamp: new Date().toISOString() }
+      data: { 
+        bookingId, 
+        status: 'searching', 
+        timestamp: new Date().toISOString() 
+      }
     });
   }
 
@@ -172,17 +236,14 @@ class WebSocketManager {
     console.log(`Provider ${client.userId} is now ${isOnline ? 'online' : 'offline'}`);
     
     if (isOnline && location) {
-      // Store provider location
       this.userLocations.set(client.userId, {
         ...location,
         lastSeen: new Date().toISOString()
       });
     } else {
-      // Remove location when offline
       this.userLocations.delete(client.userId);
     }
     
-    // Broadcast to relevant rooms (e.g., nearby customers)
     this.broadcastToRoom('nearby_customers', {
       type: 'provider_status_change',
       data: {
@@ -193,44 +254,126 @@ class WebSocketManager {
     });
   }
 
-  handleLocationUpdate(client, location) {
-    console.log(`Location update from ${client.userId}`);
+  handleLocationUpdate(client, locationData) {
+    console.log(`📍 Location update from ${client.userId}`);
     
-    // Update stored location
+    const { latitude, longitude, heading, speed, isManual, address, jobId } = locationData;
+    
+    // Update in-memory location
     this.userLocations.set(client.userId, {
-      ...location,
+      latitude,
+      longitude,
+      heading: heading || 0,
+      speed: speed || 0,
+      isManual: isManual || false,
+      address: address || '',
       lastSeen: new Date().toISOString()
     });
     
-    // Broadcast to customers who are waiting for this provider
-    this.broadcastToRoom(`provider_${client.userId}`, {
-      type: 'provider_location',
-      data: {
-        providerId: client.userId,
-        ...location
-      }
-    });
+    // If this provider is on a job, broadcast to the customer
+    const currentJobId = jobId || this.providerCurrentJobs.get(client.userId);
+    
+    if (currentJobId) {
+      // Find which customer is tracking this provider
+      const jobRoom = `job_${currentJobId}`;
+      const jobViewers = this.jobViewers.get(currentJobId) || new Set();
+      
+      // Broadcast to all users in the job room (should be just the customer)
+      this.broadcastToRoom(jobRoom, {
+        type: 'provider_location',
+        data: {
+          jobId: currentJobId,
+          providerId: client.userId,
+          location: {
+            latitude,
+            longitude,
+            heading: heading || 0,
+            speed: speed || 0,
+            isManual: isManual || false,
+            lastUpdate: new Date().toISOString()
+          }
+        }
+      });
+      
+      // Also broadcast to provider-specific room for redundancy
+      this.broadcastToRoom(`provider_${client.userId}`, {
+        type: 'provider_location',
+        data: {
+          jobId: currentJobId,
+          providerId: client.userId,
+          location: {
+            latitude,
+            longitude,
+            heading: heading || 0,
+            speed: speed || 0,
+            isManual: isManual || false,
+            lastUpdate: new Date().toISOString()
+          }
+        }
+      });
+    }
   }
 
-  handleAcceptJob(client, { jobId, bookingId, responseTime }) {
-    console.log(`Provider ${client.userId} accepted job ${jobId || bookingId}`);
+  handleRequestProviderLocation(client, { jobId, bookingId }) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`📍 Location requested for job ${jobIdentifier} by ${client.userId}`);
+    
+    // If this is a customer asking, find the provider and send current location
+    if (client.userType === 'customer') {
+      const providerId = this.getProviderForJob(jobIdentifier);
+      if (providerId) {
+        const location = this.userLocations.get(providerId);
+        if (location) {
+          this.sendToUser(client.userId, {
+            type: 'provider_location',
+            data: {
+              jobId: jobIdentifier,
+              providerId,
+              location,
+              timestamp: new Date().toISOString()
+            }
+          });
+        }
+      }
+    }
+  }
+
+  handleAcceptJob(client, { jobId, bookingId, responseTime, currentLat, currentLng }) {
+    console.log(`✅ Provider ${client.userId} accepted job ${jobId || bookingId}`);
     
     const jobIdentifier = jobId || bookingId;
     
-    // Notify customer (via job room)
+    // Store this job as the provider's current job
+    this.providerCurrentJobs.set(client.userId, jobIdentifier);
+    
+    // Prepare acceptance data with provider info
+    const acceptData = {
+      jobId: jobIdentifier,
+      bookingId: bookingId || jobId,
+      providerId: client.userId,
+      providerName: client.providerName || 'Provider',
+      acceptedAt: new Date().toISOString(),
+      responseTime: responseTime || 0,
+      location: currentLat && currentLng ? {
+        latitude: currentLat,
+        longitude: currentLng,
+        timestamp: new Date().toISOString()
+      } : null
+    };
+    
+    // Notify customer
     this.broadcastToRoom(`job_${jobIdentifier}`, {
       type: 'job_accepted',
-      data: {
-        jobId: jobIdentifier,
-        bookingId: bookingId || jobId,
-        providerId: client.userId,
-        providerName: client.providerName, // You'd need to fetch this
-        acceptedAt: new Date().toISOString(),
-        responseTime
-      }
+      data: acceptData
     });
     
-    // Also notify all providers who were viewing this job that it's taken
+    // Also send provider_assigned for backward compatibility
+    this.broadcastToRoom(`job_${jobIdentifier}`, {
+      type: 'provider_assigned',
+      data: acceptData
+    });
+    
+    // Notify other providers that job is taken
     this.broadcastToRoom(`job_${jobIdentifier}_viewers`, {
       type: 'job_taken',
       data: {
@@ -244,22 +387,21 @@ class WebSocketManager {
   }
 
   handleDeclineJob(client, { jobId, bookingId, reason }) {
-    console.log(`Provider ${client.userId} declined job ${jobId || bookingId}`);
+    console.log(`❌ Provider ${client.userId} declined job ${jobId || bookingId}`);
     
     const jobIdentifier = jobId || bookingId;
     
-    // Notify job dispatcher
     this.broadcastToRoom(`job_${jobIdentifier}`, {
       type: 'job_declined',
       data: {
         jobId: jobIdentifier,
         bookingId: bookingId || jobId,
         providerId: client.userId,
-        reason: reason || 'provider_declined'
+        reason: reason || 'provider_declined',
+        timestamp: new Date().toISOString()
       }
     });
     
-    // Remove from job viewers
     if (this.jobViewers.has(jobIdentifier)) {
       this.jobViewers.get(jobIdentifier).delete(client.userId);
     }
@@ -269,15 +411,13 @@ class WebSocketManager {
     const jobIdentifier = jobId || bookingId;
     if (!jobIdentifier) return;
     
-    console.log(`Provider ${client.userId} is viewing job ${jobIdentifier}`);
+    console.log(`👁️ Provider ${client.userId} is viewing job ${jobIdentifier}`);
     
-    // Add to job viewers
     if (!this.jobViewers.has(jobIdentifier)) {
       this.jobViewers.set(jobIdentifier, new Set());
     }
     this.jobViewers.get(jobIdentifier).add(client.userId);
     
-    // Broadcast viewer count to all viewers of this job
     const viewerCount = this.jobViewers.get(jobIdentifier).size;
     this.broadcastToRoom(`job_${jobIdentifier}_viewers`, {
       type: 'viewer_count',
@@ -287,7 +427,6 @@ class WebSocketManager {
       }
     });
     
-    // Subscribe to job updates automatically
     client.subscriptions.add(`job_${jobIdentifier}`);
     if (!this.rooms.has(`job_${jobIdentifier}`)) {
       this.rooms.set(`job_${jobIdentifier}`, new Set());
@@ -295,16 +434,116 @@ class WebSocketManager {
     this.rooms.get(`job_${jobIdentifier}`).add(client.userId);
   }
 
-  handleRequestPendingJobs(client) {
-    // This would query database for pending jobs for this provider
-    // For now, just acknowledge
-    this.sendToUser(client.userId, {
-      type: 'pending_jobs',
-      data: { jobs: [] } // Would be populated from DB
+  // New handler for en-route status
+  handleEnRoute(client, { jobId, bookingId, eta }) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`🚗 Provider ${client.userId} is en-route to job ${jobIdentifier}`);
+    
+    this.broadcastToRoom(`job_${jobIdentifier}`, {
+      type: 'provider_status_update',
+      data: {
+        jobId: jobIdentifier,
+        bookingId: bookingId || jobId,
+        status: 'en-route',
+        message: 'Provider is on the way',
+        eta: eta || 'Calculating...',
+        timestamp: new Date().toISOString()
+      }
     });
   }
 
-  handleDisconnect(socketId, userId) {
+  // New handler for arrived status
+  handleArrived(client, { jobId, bookingId }) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`📍 Provider ${client.userId} arrived at job ${jobIdentifier}`);
+    
+    this.broadcastToRoom(`job_${jobIdentifier}`, {
+      type: 'provider_status_update',
+      data: {
+        jobId: jobIdentifier,
+        bookingId: bookingId || jobId,
+        status: 'arrived',
+        message: 'Provider has arrived',
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+
+  // New handler for start service
+  handleStartService(client, { jobId, bookingId }) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`▶️ Provider ${client.userId} started service for job ${jobIdentifier}`);
+    
+    this.broadcastToRoom(`job_${jobIdentifier}`, {
+      type: 'provider_status_update',
+      data: {
+        jobId: jobIdentifier,
+        bookingId: bookingId || jobId,
+        status: 'started',
+        message: 'Service has started',
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+
+  // New handler for complete service
+  handleCompleteService(client, { jobId, bookingId }) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`✅ Provider ${client.userId} completed job ${jobIdentifier}`);
+    
+    // Remove from current jobs
+    this.providerCurrentJobs.delete(client.userId);
+    
+    this.broadcastToRoom(`job_${jobIdentifier}`, {
+      type: 'provider_status_update',
+      data: {
+        jobId: jobIdentifier,
+        bookingId: bookingId || jobId,
+        status: 'completed',
+        message: 'Service completed',
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+
+  // New handler for start tracking
+  handleStartTracking(client, { jobId, bookingId, providerId }) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`👀 ${client.userType} ${client.userId} started tracking job ${jobIdentifier}`);
+    
+    // Subscribe to provider's location updates
+    const providerToTrack = providerId || this.getProviderForJob(jobIdentifier);
+    if (providerToTrack) {
+      const room = `provider_${providerToTrack}`;
+      this.handleSubscribe(this.getSocketIdForUser(client.userId), { room });
+    }
+    
+    // Subscribe to job updates
+    this.handleSubscribe(this.getSocketIdForUser(client.userId), { room: `job_${jobIdentifier}` });
+  }
+
+  // New handler for stop tracking
+  handleStopTracking(client, { jobId, bookingId, providerId }) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`🚫 ${client.userType} ${client.userId} stopped tracking job ${jobIdentifier}`);
+    
+    const providerToTrack = providerId || this.getProviderForJob(jobIdentifier);
+    if (providerToTrack) {
+      const room = `provider_${providerToTrack}`;
+      this.handleUnsubscribe(this.getSocketIdForUser(client.userId), { room });
+    }
+    
+    this.handleUnsubscribe(this.getSocketIdForUser(client.userId), { room: `job_${jobIdentifier}` });
+  }
+
+  handleRequestPendingJobs(client) {
+    this.sendToUser(client.userId, {
+      type: 'pending_jobs',
+      data: { jobs: [] }
+    });
+  }
+
+  async handleDisconnect(socketId, userId, userType) {
     this.clients.delete(socketId);
     
     if (this.userSockets.has(userId)) {
@@ -323,7 +562,6 @@ class WebSocketManager {
         this.jobViewers.forEach((viewers, jobId) => {
           if (viewers.has(userId)) {
             viewers.delete(userId);
-            // Update viewer count
             if (viewers.size > 0) {
               this.broadcastToRoom(`job_${jobId}_viewers`, {
                 type: 'viewer_count',
@@ -333,15 +571,53 @@ class WebSocketManager {
           }
         });
         
-        // Remove location
-        this.userLocations.delete(userId);
+        // If provider, update offline status in DB after delay
+        if (userType === 'provider') {
+          // Wait a bit before marking offline (in case of temporary disconnect)
+          setTimeout(async () => {
+            if (!this.userSockets.has(userId)) {
+              try {
+                const provider = await User.findOne({ firebaseUserId: userId });
+                if (provider) {
+                  await ProviderLiveStatus.findOneAndUpdate(
+                    { providerId: provider._id },
+                    { 
+                      isOnline: false,
+                      lastSeen: new Date()
+                    }
+                  );
+                }
+              } catch (dbError) {
+                console.error('Error updating provider offline status:', dbError);
+              }
+              
+              // Remove from current jobs
+              const currentJob = this.providerCurrentJobs.get(userId);
+              if (currentJob) {
+                this.broadcastToRoom(`job_${currentJob}`, {
+                  type: 'provider_disconnected',
+                  data: {
+                    jobId: currentJob,
+                    providerId: userId,
+                    message: 'Provider disconnected',
+                    timestamp: new Date().toISOString()
+                  }
+                });
+              }
+              this.providerCurrentJobs.delete(userId);
+            }
+          }, 30000); // 30 second delay
+          
+          // Remove location
+          this.userLocations.delete(userId);
+        }
         
         console.log(`🔌 WebSocket disconnected: ${userId} (all sockets)`);
       }
     }
   }
 
-  // Public methods for external use
+  // ==================== PUBLIC METHODS ====================
 
   sendToUser(userId, message) {
     const sockets = this.userSockets.get(userId);
@@ -352,7 +628,7 @@ class WebSocketManager {
 
     sockets.forEach(socketId => {
       const client = this.clients.get(socketId);
-      if (client && client.ws.readyState === 1) { // WebSocket.OPEN
+      if (client && client.ws.readyState === 1) {
         try {
           client.ws.send(messageStr);
           sent = true;
@@ -383,13 +659,14 @@ class WebSocketManager {
     return this.sendToRoom(room, message);
   }
 
-  // Send job request to specific providers
   sendJobRequestToProviders(jobData, providerIds) {
     const message = {
       type: 'new_job_request',
       data: {
         id: jobData.jobId || jobData.bookingId,
+        jobId: jobData.jobId,
         bookingId: jobData.bookingId,
+        jobNumber: jobData.jobNumber,
         customerName: jobData.customerName,
         customerId: jobData.customerId,
         serviceType: jobData.serviceType,
@@ -400,13 +677,14 @@ class WebSocketManager {
         dropoffLocation: jobData.dropoffLocation,
         dropoffLat: jobData.dropoffLat,
         dropoffLng: jobData.dropoffLng,
-        distance: jobData.distance,
+        distance: jobData.distance || 'Calculating...',
         estimatedEarnings: jobData.estimatedEarnings,
         price: jobData.price || jobData.estimatedEarnings,
-        urgency: jobData.urgency,
+        urgency: jobData.urgency || 'normal',
         timestamp: new Date().toISOString(),
-        description: jobData.description,
-        vehicleDetails: jobData.vehicleDetails
+        description: jobData.description || '',
+        vehicleDetails: jobData.vehicleDetails || '',
+        expiresAt: new Date(Date.now() + 60000).toISOString() // Expires in 60 seconds
       }
     };
 
@@ -414,7 +692,6 @@ class WebSocketManager {
     providerIds.forEach(providerId => {
       if (this.sendToUser(providerId, message)) {
         sentCount++;
-        // Subscribe provider to job updates
         this.subscribeToJob(providerId, jobData.jobId || jobData.bookingId);
       }
     });
@@ -422,14 +699,12 @@ class WebSocketManager {
     return sentCount;
   }
 
-  // Send job request to nearby providers based on location
-  sendJobRequestToNearbyProviders(jobData, radius = 10) { // radius in km
+  sendJobRequestToNearbyProviders(jobData, radius = 10) {
     const nearbyProviders = this.findNearbyProviders(
       jobData.pickupLat, 
       jobData.pickupLng, 
       radius
     );
-    
     return this.sendJobRequestToProviders(jobData, nearbyProviders);
   }
 
@@ -437,7 +712,6 @@ class WebSocketManager {
     const nearby = [];
     
     this.userLocations.forEach((location, providerId) => {
-      // Calculate distance (simplified - you'd want proper haversine formula)
       const distance = this.calculateDistance(
         lat, lng,
         location.latitude, location.longitude
@@ -452,8 +726,7 @@ class WebSocketManager {
   }
 
   calculateDistance(lat1, lon1, lat2, lon2) {
-    // Haversine formula to calculate distance in km
-    const R = 6371; // Earth's radius in km
+    const R = 6371;
     const dLat = this.deg2rad(lat2 - lat1);
     const dLon = this.deg2rad(lon2 - lon1);
     const a = 
@@ -461,8 +734,7 @@ class WebSocketManager {
       Math.cos(this.deg2rad(lat1)) * Math.cos(this.deg2rad(lat2)) * 
       Math.sin(dLon/2) * Math.sin(dLon/2); 
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
-    const distance = R * c; // Distance in km
-    return distance;
+    return R * c;
   }
 
   deg2rad(deg) {
@@ -475,14 +747,12 @@ class WebSocketManager {
     }
     this.rooms.get(`job_${jobId}`).add(providerId);
     
-    // Also add to viewers room
     if (!this.rooms.has(`job_${jobId}_viewers`)) {
       this.rooms.set(`job_${jobId}_viewers`, new Set());
     }
     this.rooms.get(`job_${jobId}_viewers`).add(providerId);
   }
 
-  // Notify customer about provider status
   notifyCustomerOfProvider(customerId, providerData) {
     this.sendToUser(customerId, {
       type: 'provider_assigned',
@@ -490,7 +760,6 @@ class WebSocketManager {
     });
   }
 
-  // Update job status
   updateJobStatus(jobId, status, additionalData = {}) {
     this.broadcastToRoom(`job_${jobId}`, {
       type: 'job_status_update',
@@ -503,6 +772,25 @@ class WebSocketManager {
     });
   }
 
+  // Helper method to get provider for a job
+  getProviderForJob(jobId) {
+    for (const [providerId, currentJobId] of this.providerCurrentJobs.entries()) {
+      if (currentJobId === jobId) {
+        return providerId;
+      }
+    }
+    return null;
+  }
+
+  // Helper method to get socket ID for a user
+  getSocketIdForUser(userId) {
+    const sockets = this.userSockets.get(userId);
+    if (sockets && sockets.size > 0) {
+      return sockets.values().next().value;
+    }
+    return null;
+  }
+
   generateSocketId() {
     return `socket_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
@@ -513,11 +801,14 @@ class WebSocketManager {
       totalUsers: this.userSockets.size,
       totalRooms: this.rooms.size,
       totalJobsBeingViewed: this.jobViewers.size,
+      totalActiveProviders: this.userLocations.size,
+      totalActiveJobs: this.providerCurrentJobs.size,
       connectionsByType: {
         customers: Array.from(this.clients.values()).filter(c => c.userType === 'customer').length,
         providers: Array.from(this.clients.values()).filter(c => c.userType === 'provider').length
       },
-      onlineProviders: this.userLocations.size
+      onlineProviders: this.userLocations.size,
+      activeJobs: this.providerCurrentJobs.size
     };
   }
 }

@@ -49,6 +49,17 @@ const providerLiveStatusSchema = new mongoose.Schema({
     default: Date.now
   },
 
+   heading: {
+    type: Number, // Direction in degrees (0-360)
+    min: 0,
+    max: 360
+  },
+  
+  speed: {
+    type: Number, // Speed in km/h
+    min: 0
+  },
+
   currentTaskId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Task',
