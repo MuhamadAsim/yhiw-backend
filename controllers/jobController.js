@@ -397,14 +397,126 @@ export const getTodaysJobs = async (req, res) => {
 
 
 
-
 // ==================== CUSTOMER FIND PROVIDER ====================
 export const findProvider = async (req, res) => {
   try {
-    console.log('='.repeat(50));
+    console.log('='.repeat(70));
     console.log('🚀 FIND PROVIDER CONTROLLER STARTED');
-    console.log('='.repeat(50));
+    console.log('='.repeat(70));
+    console.log('🕒 Timestamp:', new Date().toISOString());
 
+    // Log 1: Check what's in req.user from auth middleware
+    console.log('\n📋 LOG 1: AUTHENTICATION DATA');
+    console.log('----------------------------------------');
+    console.log('req.user present?', !!req.user);
+    if (req.user) {
+      console.log('req.user type:', typeof req.user);
+      console.log('req.user keys:', Object.keys(req.user));
+      console.log('Full req.user:', JSON.stringify(req.user, null, 2));
+      
+      // Check for ID in various possible locations
+      console.log('Checking for ID fields:');
+      console.log('- req.user.id:', req.user.id);
+      console.log('- req.user._id:', req.user._id);
+      console.log('- req.user.userId:', req.user.userId);
+      console.log('- req.user.uid:', req.user.uid);
+      console.log('- req.user.sub:', req.user.sub);
+    } else {
+      console.log('❌ req.user is null or undefined!');
+    }
+
+    // Log 2: Check Authorization Header
+    console.log('\n📋 LOG 2: AUTHORIZATION HEADER');
+    console.log('----------------------------------------');
+    console.log('Auth header present?', !!req.headers['authorization']);
+    if (req.headers['authorization']) {
+      const authHeader = req.headers['authorization'];
+      console.log('Auth header format:', authHeader.substring(0, 20) + '...');
+      console.log('Starts with Bearer?', authHeader.startsWith('Bearer '));
+    }
+
+    // Log 3: Check Request Body
+    console.log('\n📋 LOG 3: REQUEST BODY');
+    console.log('----------------------------------------');
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Full request body:', JSON.stringify(req.body, null, 2));
+
+    // Log 4: Extract Customer ID - TRY MULTIPLE SOURCES
+    console.log('\n📋 LOG 4: EXTRACTING CUSTOMER ID');
+    console.log('----------------------------------------');
+    
+    let customerId = null;
+    let idSource = '';
+
+    // Try to get from req.user (from auth middleware)
+    if (req.user) {
+      // Check all possible ID fields
+      const possibleIdFields = ['id', '_id', 'userId', 'uid', 'sub', 'firebaseUserId'];
+      
+      for (const field of possibleIdFields) {
+        if (req.user[field]) {
+          customerId = req.user[field];
+          idSource = `req.user.${field}`;
+          console.log(`✅ Found ID in ${idSource}:`, customerId);
+          break;
+        }
+      }
+    }
+
+    // If still no ID, try from request body
+    if (!customerId && req.body.customerId) {
+      customerId = req.body.customerId;
+      idSource = 'req.body.customerId';
+      console.log(`✅ Found ID in ${idSource}:`, customerId);
+    }
+
+    // If still no ID, try to extract from token manually
+    if (!customerId && req.headers['authorization']) {
+      try {
+        const token = req.headers['authorization'].split(' ')[1];
+        const decoded = jwt.decode(token); // Just decode without verification
+        console.log('Manually decoded token:', decoded);
+        
+        if (decoded) {
+          for (const field of ['id', '_id', 'userId', 'uid', 'sub']) {
+            if (decoded[field]) {
+              customerId = decoded[field];
+              idSource = `decoded token.${field}`;
+              console.log(`✅ Found ID in ${idSource}:`, customerId);
+              break;
+            }
+          }
+        }
+      } catch (decodeError) {
+        console.log('❌ Failed to decode token manually:', decodeError.message);
+      }
+    }
+
+    // Final check for customerId
+    console.log('\n📋 LOG 5: FINAL CUSTOMER ID CHECK');
+    console.log('----------------------------------------');
+    if (!customerId) {
+      console.error('❌ CRITICAL: No customerId found in any location!');
+      
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated properly. Please sign in again.',
+        debug: {
+          hasUser: !!req.user,
+          userKeys: req.user ? Object.keys(req.user) : [],
+          bodyKeys: Object.keys(req.body),
+          hasAuthHeader: !!req.headers['authorization']
+        }
+      });
+    }
+
+    console.log('✅ FINAL CUSTOMER ID:', customerId);
+    console.log('✅ ID SOURCE:', idSource);
+
+    // Log 6: Parse Request Body Data
+    console.log('\n📋 LOG 6: PARSED REQUEST DATA');
+    console.log('----------------------------------------');
+    
     const {
       pickup,
       dropoff,
@@ -426,24 +538,28 @@ export const findProvider = async (req, res) => {
       version
     } = req.body;
 
-    const customerId = req.user.id;
-    console.log('Customer ID from token:', customerId);
+    console.log('Service Info:', { serviceId, serviceName, servicePrice, serviceCategory });
+    console.log('Pickup:', pickup);
+    console.log('Dropoff:', dropoff);
+    console.log('Vehicle:', vehicle);
+    console.log('Customer Contact:', customer);
+    console.log('Schedule:', schedule);
+    console.log('Payment:', payment);
 
-    if (!customerId) {
-      return res.status(401).json({
-        success: false,
-        message: 'User not authenticated properly'
-      });
-    }
-
-    // GENERATE IDs HERE (not in pre-save)
+    // Log 7: Generate IDs
+    console.log('\n📋 LOG 7: GENERATING IDs');
+    console.log('----------------------------------------');
+    
     const bookingId = generateBookingId();
     const jobNumber = generateJobNumber();
     
     console.log('✅ Generated bookingId:', bookingId);
     console.log('✅ Generated jobNumber:', jobNumber);
 
-    // Transform location data properly for MongoDB
+    // Log 8: Transform Location Data
+    console.log('\n📋 LOG 8: TRANSFORMING LOCATION DATA');
+    console.log('----------------------------------------');
+    
     const pickupLocation = {
       address: pickup?.address || 'Pickup location',
       latitude: pickup?.coordinates?.lat || 0,
@@ -462,43 +578,39 @@ export const findProvider = async (req, res) => {
         : [0, 0]
     } : undefined;
 
-    console.log('📍 Pickup location:', pickupLocation);
-    console.log('📍 Dropoff location:', dropoffLocation || 'Not provided');
+    console.log('📍 Pickup location transformed:', pickupLocation);
+    console.log('📍 Dropoff location transformed:', dropoffLocation || 'Not provided');
 
-    // Create job with explicit IDs
+    // Log 9: Create Job Object
+    console.log('\n📋 LOG 9: CREATING JOB OBJECT');
+    console.log('----------------------------------------');
+    
     const job = new Job({
-      // Set IDs explicitly
       bookingId,
       jobNumber,
-      customerId,
+      customerId, // This should now be set correctly
       
-      // Service Information
       serviceId,
       serviceName,
       servicePrice: parseFloat(servicePrice) || 0,
       serviceCategory,
       serviceTime: schedule?.type || 'right_now',
       
-      // Service type flags
       isCarRental: isCarRental || false,
       isFuelDelivery: isFuelDelivery || false,
       isSpareParts: isSpareParts || false,
       
-      // Title and description
       title: serviceName,
       serviceType: serviceCategory,
       description: additionalDetails?.description || '',
       
-      // Price and payment
       price: payment?.totalAmount || parseFloat(servicePrice) || 0,
       paymentMethod: payment?.paymentMethod || 'cash',
       paymentStatus: 'pending',
       
-      // Locations
       pickup: pickupLocation,
       dropoff: dropoffLocation,
       
-      // Store all frontend data in their respective schema fields
       vehicle: vehicle || {},
       customer: customer || {},
       additionalDetails: additionalDetails || {},
@@ -507,12 +619,10 @@ export const findProvider = async (req, res) => {
       locationSkipped: locationSkipped || false,
       selectedTip: payment?.selectedTip || 0,
       
-      // Status
       status: 'pending',
       requestedAt: new Date(),
       estimatedDuration: 30,
       
-      // Metadata (backup of all data)
       metadata: {
         vehicle,
         customer,
@@ -530,15 +640,34 @@ export const findProvider = async (req, res) => {
       }
     });
 
-    console.log('💾 Attempting to save job...');
-    await job.save();
-    console.log('✅ Job saved successfully with ID:', job._id);
-    console.log('✅ Booking ID:', job.bookingId);
+    console.log('✅ Job object created with customerId:', job.customerId);
+    console.log('Job object preview:', {
+      bookingId: job.bookingId,
+      jobNumber: job.jobNumber,
+      customerId: job.customerId,
+      serviceName: job.serviceName,
+      status: job.status
+    });
 
-    // Find nearby online providers
-    console.log('🔍 Finding nearby online providers...');
+    // Log 10: Save Job
+    console.log('\n📋 LOG 10: SAVING JOB TO DATABASE');
+    console.log('----------------------------------------');
+    
+    console.log('Attempting to save job...');
+    await job.save();
+    console.log('✅ Job saved successfully!');
+    console.log('📌 MongoDB _id:', job._id);
+    console.log('📌 Booking ID:', job.bookingId);
+    console.log('📌 Job Number:', job.jobNumber);
+
+    // Log 11: Find Nearby Providers
+    console.log('\n📋 LOG 11: FINDING NEARBY PROVIDERS');
+    console.log('----------------------------------------');
     
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    console.log('Looking for providers active since:', fifteenMinutesAgo.toISOString());
+    
+    console.log('Search coordinates:', [pickupLocation.longitude, pickupLocation.latitude]);
     
     const eligibleProviders = await ProviderLiveStatus.find({
       isOnline: true,
@@ -556,65 +685,82 @@ export const findProvider = async (req, res) => {
     }).populate('providerId', 'firebaseUserId fullName rating totalJobsCompleted profileImage phone vehicleDetails licensePlate');
 
     console.log(`✅ Found ${eligibleProviders.length} eligible providers nearby`);
+    
+    if (eligibleProviders.length > 0) {
+      console.log('Provider details:');
+      eligibleProviders.forEach((p, index) => {
+        console.log(`  Provider ${index + 1}:`, {
+          name: p.providerId?.fullName,
+          firebaseId: p.providerId?.firebaseUserId,
+          distance: 'within 20km',
+          rating: p.providerId?.rating
+        });
+      });
+    }
 
-    // Prepare job request data for WebSocket with ALL fields
+    // Log 12: Prepare WebSocket Data
+    console.log('\n📋 LOG 12: PREPARING WEBSOCKET DATA');
+    console.log('----------------------------------------');
+    
     const jobRequestData = {
-      // Core identifiers
       jobId: job._id.toString(),
       bookingId: job.bookingId,
       jobNumber: job.jobNumber,
-      
-      // Service info
       serviceType: serviceCategory,
       serviceName: serviceName,
       serviceId: serviceId,
-      
-      // Pricing
       price: payment?.totalAmount || servicePrice,
       estimatedEarnings: payment?.totalAmount || servicePrice,
-      
-      // Location
       pickupLocation: pickup?.address || 'Pickup location',
       pickupLat: pickup?.coordinates?.lat || 0,
       pickupLng: pickup?.coordinates?.lng || 0,
       dropoffLocation: dropoff?.address || null,
       dropoffLat: dropoff?.coordinates?.lat || null,
       dropoffLng: dropoff?.coordinates?.lng || null,
-      
-      // Customer info
       customerName: customer?.name || 'Customer',
       customerPhone: customer?.phone || '',
       customerId: customerId,
-      
-      // Job details
       distance: '0',
       urgency: additionalDetails?.urgency || 'normal',
       description: additionalDetails?.description || '',
       vehicleDetails: vehicle?.makeModel || '',
-      
-      // Vehicle info
       vehicle: vehicle || {},
       additionalDetails: additionalDetails || {},
-      
-      // Timestamps
       timestamp: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 60000).toISOString() // Expires in 60 seconds
+      expiresAt: new Date(Date.now() + 60000).toISOString()
     };
 
-    // Send via WebSocket if available
+    console.log('WebSocket data prepared:', JSON.stringify(jobRequestData, null, 2));
+
+    // Log 13: Send via WebSocket
+    console.log('\n📋 LOG 13: SENDING WEBSOCKET NOTIFICATIONS');
+    console.log('----------------------------------------');
+    
     const wsManager = req.app.get('wsManager');
+    console.log('WebSocket manager available?', !!wsManager);
+    
     const providerIds = eligibleProviders
       .map(p => p.providerId?.firebaseUserId)
       .filter(id => id);
     
+    console.log('Provider Firebase IDs to notify:', providerIds);
+    
     if (providerIds.length > 0 && wsManager) {
       const sentCount = wsManager.sendJobRequestToProviders(jobRequestData, providerIds);
       console.log(`📨 Sent job request to ${sentCount}/${providerIds.length} providers via WebSocket`);
+      
+      if (sentCount < providerIds.length) {
+        console.log(`⚠️ Failed to send to ${providerIds.length - sentCount} providers`);
+      }
     } else {
       console.log('⚠️ No providers to notify or WebSocket manager not available');
     }
 
-    return res.status(200).json({
+    // Log 14: Send Response
+    console.log('\n📋 LOG 14: SENDING RESPONSE TO CLIENT');
+    console.log('----------------------------------------');
+    
+    const response = {
       success: true,
       message: 'Searching for providers',
       bookingId: job.bookingId,
@@ -624,16 +770,36 @@ export const findProvider = async (req, res) => {
       providersFound: eligibleProviders.length,
       estimatedWaitTime: eligibleProviders.length > 0 ? '30-60 seconds' : '2-3 minutes',
       websocketEnabled: true
-    });
+    };
+
+    console.log('Response being sent:', JSON.stringify(response, null, 2));
+    console.log('='.repeat(70));
+    console.log('✅ FIND PROVIDER CONTROLLER COMPLETED SUCCESSFULLY');
+    console.log('='.repeat(70));
+
+    return res.status(200).json(response);
 
   } catch (error) {
-    console.error('❌ Error in findProvider:', error);
+    console.error('\n❌❌❌ ERROR IN FIND PROVIDER CONTROLLER ❌❌❌');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
+    
+    if (error.name === 'ValidationError') {
+      console.error('Mongoose Validation Error Details:', error.errors);
+    }
+    
+    if (error.name === 'MongoServerError' && error.code === 11000) {
+      console.error('Duplicate key error:', error.keyValue);
+    }
+    
+    console.error('='.repeat(70));
     
     return res.status(500).json({
       success: false,
       message: 'Failed to process request',
-      error: error.message
+      error: error.message,
+      errorType: error.name
     });
   }
 };

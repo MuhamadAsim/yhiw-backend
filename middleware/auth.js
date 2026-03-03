@@ -8,7 +8,7 @@ export const authenticateToken = (req, res, next) => {
   
   try {
     const authHeader = req.headers['authorization'];
-    console.log('Auth header:', authHeader);
+    console.log('Auth header present:', !!authHeader);
     
     if (!authHeader) {
       console.log('❌ No authorization header');
@@ -43,17 +43,68 @@ export const authenticateToken = (req, res, next) => {
       }
       
       console.log('✅ Token verified successfully');
-      console.log('Decoded token:', decoded);
+      console.log('Decoded token:', JSON.stringify(decoded, null, 2));
       
       // Check what's in the decoded token
-      console.log('Token contains id:', decoded.id);
-      console.log('Token contains _id:', decoded._id);
-      console.log('Token contains userId:', decoded.userId);
+      console.log('\n🔍 CHECKING FOR USER ID IN TOKEN:');
+      console.log('- decoded.id:', decoded.id);
+      console.log('- decoded._id:', decoded._id);
+      console.log('- decoded.userId:', decoded.userId);
+      console.log('- decoded.uid:', decoded.uid);
+      console.log('- decoded.sub:', decoded.sub);
+      console.log('- decoded.firebaseUserId:', decoded.firebaseUserId);
       
-      req.user = decoded;
-      console.log('req.user set to:', req.user);
-      console.log('Calling next()...');
+      // IMPORTANT: Extract the best available ID and make it available as req.user.id
+      // This ensures your controller can always access req.user.id
+      let userId = null;
       
+      // Try different possible ID fields in order of preference
+      if (decoded.id) {
+        userId = decoded.id;
+        console.log('✅ Using decoded.id as userId:', userId);
+      } else if (decoded._id) {
+        userId = decoded._id;
+        console.log('✅ Using decoded._id as userId:', userId);
+      } else if (decoded.userId) {
+        userId = decoded.userId;
+        console.log('✅ Using decoded.userId as userId:', userId);
+      } else if (decoded.uid) {
+        userId = decoded.uid;
+        console.log('✅ Using decoded.uid as userId:', userId);
+      } else if (decoded.sub) {
+        userId = decoded.sub;
+        console.log('✅ Using decoded.sub as userId:', userId);
+      } else if (decoded.firebaseUserId) {
+        userId = decoded.firebaseUserId;
+        console.log('✅ Using decoded.firebaseUserId as userId:', userId);
+      }
+      
+      // Set req.user with the extracted ID and all original data
+      req.user = {
+        ...decoded,           // Keep all original decoded data
+        id: userId,           // Ensure id is always set (what your controller expects)
+        _id: decoded._id || userId,  // Keep _id if exists
+        userId: decoded.userId || userId, // Keep userId if exists
+        uid: decoded.uid || userId,    // Keep uid if exists
+      };
+      
+      console.log('\n📦 FINAL req.user SET TO:');
+      console.log(JSON.stringify({
+        id: req.user.id,
+        _id: req.user._id,
+        userId: req.user.userId,
+        uid: req.user.uid,
+        email: req.user.email,
+        role: req.user.role
+      }, null, 2));
+      
+      if (!req.user.id) {
+        console.log('⚠️ WARNING: No user ID could be extracted from token!');
+      } else {
+        console.log('✅ User ID successfully set to:', req.user.id);
+      }
+      
+      console.log('\n➡️ Calling next()...');
       next();
     });
   } catch (error) {
