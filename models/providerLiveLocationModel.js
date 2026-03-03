@@ -1,4 +1,3 @@
-// models/providerLiveLocationModel.js
 import mongoose from 'mongoose';
 
 const providerLiveStatusSchema = new mongoose.Schema({
@@ -7,6 +6,12 @@ const providerLiveStatusSchema = new mongoose.Schema({
     ref: 'User',
     required: true,
     unique: true
+  },
+  
+  // Firebase ID for WebSocket connections
+  firebaseUserId: {
+    type: String,
+    required: true
   },
 
   isOnline: {
@@ -19,6 +24,19 @@ const providerLiveStatusSchema = new mongoose.Schema({
     default: true
   },
 
+  // Current active job (if any)
+  currentJobId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Job',
+    default: null
+  },
+
+  // Current booking ID (for quick reference)
+  currentBookingId: {
+    type: String,
+    default: null
+  },
+
   currentLocation: {
     type: {
       type: String,
@@ -27,8 +45,8 @@ const providerLiveStatusSchema = new mongoose.Schema({
     },
     coordinates: {
       type: [Number], // [longitude, latitude]
-      // REMOVE the inline index from here
-      required: true // Add this to ensure coordinates are always present
+      required: true,
+      default: [0, 0]
     },
     isManual: {
       type: Boolean,
@@ -44,12 +62,37 @@ const providerLiveStatusSchema = new mongoose.Schema({
     }
   },
 
+  // Service areas/capabilities
+  serviceCategories: [{
+    type: String,
+    enum: [
+      'Towing',
+      'Roadside Assistance',
+      'Fuel Delivery',
+      'Battery Replacement',
+      'AC Gas Refill',
+      'Tire Replacement',
+      'Oil Change',
+      'Inspection / Repair',
+      'Car Wash',
+      'Car Detailing',
+      'Car Rental',
+      'Spare Parts'
+    ]
+  }],
+
+  // Service radius in km
+  serviceRadius: {
+    type: Number,
+    default: 10
+  },
+
   lastSeen: {
     type: Date,
     default: Date.now
   },
 
-   heading: {
+  heading: {
     type: Number, // Direction in degrees (0-360)
     min: 0,
     max: 360
@@ -60,6 +103,19 @@ const providerLiveStatusSchema = new mongoose.Schema({
     min: 0
   },
 
+  // Provider stats (for quick access)
+  rating: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 5
+  },
+  totalJobsCompleted: {
+    type: Number,
+    default: 0
+  },
+
+  // Current task/job reference
   currentTaskId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Task',
@@ -68,8 +124,11 @@ const providerLiveStatusSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
-// Create ONLY ONE 2dsphere index for geospatial queries
+// Indexes
 providerLiveStatusSchema.index({ currentLocation: '2dsphere' });
+providerLiveStatusSchema.index({ isOnline: 1, isAvailable: 1 });
+providerLiveStatusSchema.index({ firebaseUserId: 1 });
+providerLiveStatusSchema.index({ serviceCategories: 1 });
 
 const ProviderLiveStatus = mongoose.model('ProviderLiveStatus', providerLiveStatusSchema);
 export default ProviderLiveStatus;

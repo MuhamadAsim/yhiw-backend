@@ -2,7 +2,6 @@ import Job from '../models/jobModel.js';
 import User from '../models/userModel.js';
 import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
 import mongoose from 'mongoose';
-import Notification from '../models/notificationModel.js';
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -517,30 +516,6 @@ export const findProvider = async (req, res) => {
       console.log(`📨 Sent job request to ${sentCount} providers via WebSocket`);
     }
 
-    // Create notifications as backup
-    if (eligibleProviders.length > 0) {
-      console.log('📨 Creating notifications as backup...');
-      
-      const notificationPromises = eligibleProviders.map(async (provider) => {
-        try {
-          const notification = new Notification({
-            userId: provider.providerId._id,
-            type: 'NEW_JOB_REQUEST',
-            title: 'New Service Request',
-            message: `${serviceName} - ${pickup?.address?.substring(0, 50) || 'New job'}...`,
-            data: jobRequestData
-          });
-          return notification.save();
-        } catch (err) {
-          console.log(`⚠️ Failed to create notification:`, err.message);
-          return null;
-        }
-      });
-
-      await Promise.allSettled(notificationPromises);
-      console.log(`✅ Created backup notifications`);
-    }
-
     return res.status(200).json({
       success: true,
       message: 'Searching for providers',
@@ -816,18 +791,6 @@ export const acceptJob = async (req, res) => {
         wsManager.sendToUser(job.customerId.firebaseUserId, statusMessage);
       }
 
-      if (job.customerId?._id) {
-        const notification = new Notification({
-          userId: job.customerId._id,
-          type: 'JOB_ACCEPTED',
-          title: 'Provider Found!',
-          message: `${provider.fullName} has accepted your request and is on the way`,
-          data: providerData
-        });
-        await notification.save();
-        console.log('✅ Backup notification created');
-      }
-
       return res.status(200).json({
         success: true,
         message: 'Job accepted successfully',
@@ -917,21 +880,6 @@ export const providerEnRoute = async (req, res) => {
       });
     }
 
-    if (job.customerId?._id) {
-      const notification = new Notification({
-        userId: job.customerId._id,
-        type: 'PROVIDER_EN_ROUTE',
-        title: 'Provider On The Way',
-        message: `${provider.fullName} is on the way to your location`,
-        data: {
-          jobId: job._id.toString(),
-          jobNumber: job.jobNumber,
-          eta
-        }
-      });
-      await notification.save();
-    }
-
     res.status(200).json({
       success: true,
       message: 'Status updated to en-route',
@@ -992,21 +940,6 @@ export const providerArrived = async (req, res) => {
       });
     }
 
-    if (job.customerId?._id) {
-      const notification = new Notification({
-        userId: job.customerId._id,
-        type: 'PROVIDER_ARRIVED',
-        title: 'Provider Arrived',
-        message: `${provider.fullName} has arrived at your location`,
-        data: {
-          jobId: job._id.toString(),
-          jobNumber: job.jobNumber,
-          arrivedAt: new Date().toISOString()
-        }
-      });
-      await notification.save();
-    }
-
     res.status(200).json({
       success: true,
       message: 'Arrival confirmed',
@@ -1064,21 +997,6 @@ export const providerStartService = async (req, res) => {
           startedAt: new Date().toISOString()
         }
       });
-    }
-
-    if (job.customerId?._id) {
-      const notification = new Notification({
-        userId: job.customerId._id,
-        type: 'SERVICE_STARTED',
-        title: 'Service Started',
-        message: `Your service has started`,
-        data: {
-          jobId: job._id.toString(),
-          jobNumber: job.jobNumber,
-          startedAt: new Date().toISOString()
-        }
-      });
-      await notification.save();
     }
 
     res.status(200).json({
@@ -1157,21 +1075,6 @@ export const providerCompleteService = async (req, res) => {
           finalEarnings
         }
       });
-    }
-
-    if (updatedJob.customerId?._id) {
-      const notification = new Notification({
-        userId: updatedJob.customerId._id,
-        type: 'JOB_COMPLETED',
-        title: 'Service Completed',
-        message: `Your service has been completed by ${provider.fullName}`,
-        data: {
-          jobId: updatedJob._id.toString(),
-          jobNumber: updatedJob.jobNumber,
-          completedAt: new Date().toISOString()
-        }
-      });
-      await notification.save();
     }
 
     res.status(200).json({
