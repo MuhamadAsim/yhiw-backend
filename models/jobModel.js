@@ -59,7 +59,6 @@ const sparePartsDetailsSchema = new mongoose.Schema({
 const additionalDetailsSchema = new mongoose.Schema({
   urgency: {
     type: String,
-    enum: ['emergency', 'urgent', 'normal']
   },
   issues: [String],
   description: String,
