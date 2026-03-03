@@ -17,6 +17,8 @@ class WebSocketManager {
     this.customerCurrentJobs = new Map(); // customerId -> jobId (for quick lookup)
     this.customerTracking = new Map(); // providerId -> Set of customerIds tracking them
     this.jobRooms = new Map(); // jobId -> { providerId, customerId, roomName: `job_${jobId}` }
+    this.jobExpiryTimers = new Map(); // jobId -> setTimeout reference
+    this.jobProviderList = new Map(); // jobId -> Set of providerIds who received this job
     
     this.initialize();
   }
@@ -149,7 +151,7 @@ class WebSocketManager {
           this.handleRequestCustomerLocation(client, payload);
           break;
         
-        // Job management - CRITICAL: ACCEPT JOB HANDLER
+        // Job management
         case 'accept_job':
           this.handleAcceptJob(client, payload);
           break;
@@ -377,7 +379,7 @@ class WebSocketManager {
     }
   }
 
-  // CRITICAL: ACCEPT JOB HANDLER
+  // ✅ UPDATED: ACCEPT JOB HANDLER with notifications to other providers
   async handleAcceptJob(client, { jobId, bookingId, acceptedAt }) {
     const jobIdentifier = jobId || bookingId;
     console.log(`✅✅✅ Provider ${client.userId} ACCEPTED job ${jobIdentifier}`);
@@ -446,27 +448,48 @@ class WebSocketManager {
 
       console.log('📦 Provider data prepared:', JSON.stringify(providerData, null, 2));
 
-      // Send to customer via WebSocket (multiple message types for redundancy)
+      // Send to customer via WebSocket
       if (customerFirebaseId) {
-        // Send job_accepted (what frontend listens for)
         this.sendToUser(customerFirebaseId, {
           type: 'job_accepted',
           data: providerData
         });
         
-        // Send provider_assigned (backup)
         this.sendToUser(customerFirebaseId, {
           type: 'provider_assigned',
           data: providerData
         });
         
-        // Send booking_accepted (another backup)
         this.sendToUser(customerFirebaseId, {
           type: 'booking_accepted',
           data: providerData
         });
 
         console.log(`📨 Sent acceptance notifications to customer ${customerFirebaseId}`);
+      }
+
+      // ✅ NOTIFY ALL OTHER PROVIDERS that this job is taken
+      const otherProviders = this.jobProviderList.get(jobIdentifier) || new Set();
+      otherProviders.forEach(providerId => {
+        if (providerId !== client.userId) {
+          this.sendToUser(providerId, {
+            type: 'job_accepted_by_other',
+            data: {
+              jobId: jobIdentifier,
+              bookingId: job.bookingId,
+              providerId: client.userId,
+              timestamp: new Date().toISOString()
+            }
+          });
+          console.log(`📨 Notified provider ${providerId} that job was taken`);
+        }
+      });
+
+      // ✅ CANCEL THE EXPIRY TIMER
+      if (this.jobExpiryTimers.has(jobIdentifier)) {
+        clearTimeout(this.jobExpiryTimers.get(jobIdentifier));
+        this.jobExpiryTimers.delete(jobIdentifier);
+        console.log(`⏰ Cancelled expiry timer for job ${jobIdentifier}`);
       }
 
       // Create job room for real-time communication
@@ -501,6 +524,9 @@ class WebSocketManager {
         }
       }
 
+      // ✅ CLEAN UP JOB PROVIDER LIST
+      this.jobProviderList.delete(jobIdentifier);
+
       console.log(`✅ Job ${jobIdentifier} fully processed, room ${roomName} created`);
 
     } catch (error) {
@@ -508,17 +534,60 @@ class WebSocketManager {
     }
   }
 
+  // ✅ UPDATED: DECLINE JOB HANDLER
   handleDeclineJob(client, { jobId, bookingId, reason }) {
-    console.log(`❌ Provider ${client.userId} declined job ${jobId || bookingId}`);
-    
     const jobIdentifier = jobId || bookingId;
+    console.log(`❌ Provider ${client.userId} declined job ${jobIdentifier}, reason: ${reason}`);
     
     // Remove from viewers
     if (this.jobViewers.has(jobIdentifier)) {
       this.jobViewers.get(jobIdentifier).delete(client.userId);
     }
+    
+    // Optionally notify customer that a provider declined (if you want)
+    // This is usually not necessary
   }
 
+  // ✅ NEW: HANDLE JOB EXPIRY
+  async handleJobExpiry(jobId, bookingId) {
+    const jobIdentifier = jobId || bookingId;
+    console.log(`⏰ Job ${jobIdentifier} expired - no provider accepted`);
+    
+    try {
+      // Update job in database
+      const job = await Job.findById(jobIdentifier);
+      if (job && job.status === 'pending') {
+        job.status = 'expired';
+        job.expiredAt = new Date();
+        await job.save();
+        console.log(`✅ Job ${jobIdentifier} marked as expired in database`);
+      }
+    } catch (error) {
+      console.error('Error updating job to expired:', error);
+    }
+
+    // Notify all providers who received this job
+    const providers = this.jobProviderList.get(jobIdentifier) || new Set();
+    providers.forEach(providerId => {
+      this.sendToUser(providerId, {
+        type: 'job_expired',
+        data: {
+          jobId: jobIdentifier,
+          bookingId: bookingId || jobId,
+          timestamp: new Date().toISOString()
+        }
+      });
+    });
+
+    // Notify customer if they're online
+    // You would need to get the customer ID from the job
+
+    // Clean up
+    this.jobProviderList.delete(jobIdentifier);
+    this.jobExpiryTimers.delete(jobIdentifier);
+  }
+
+  // ✅ UPDATED: JOB VIEWING HANDLER
   handleJobViewing(client, { jobId, bookingId }) {
     const jobIdentifier = jobId || bookingId;
     if (!jobIdentifier) return;
@@ -531,6 +600,15 @@ class WebSocketManager {
     this.jobViewers.get(jobIdentifier).add(client.userId);
     
     const viewerCount = this.jobViewers.get(jobIdentifier).size;
+    
+    // Broadcast viewer count to all viewers
+    this.broadcastToRoom(`job_${jobIdentifier}_viewers`, {
+      type: 'viewer_count',
+      data: {
+        jobId: jobIdentifier,
+        count: viewerCount
+      }
+    });
     
     // Subscribe to job room for updates
     const socketId = this.getSocketIdForUser(client.userId);
@@ -848,11 +926,14 @@ class WebSocketManager {
     return this.sendToRoom(room, message);
   }
 
+  // ✅ UPDATED: sendJobRequestToProviders with provider tracking and expiry
   sendJobRequestToProviders(jobData, providerIds) {
+    const jobId = jobData.jobId || jobData.bookingId;
+    
     const message = {
       type: 'new_job_request',
       data: {
-        id: jobData.jobId || jobData.bookingId,
+        id: jobId,
         jobId: jobData.jobId,
         bookingId: jobData.bookingId,
         jobNumber: jobData.jobNumber,
@@ -873,16 +954,38 @@ class WebSocketManager {
         timestamp: new Date().toISOString(),
         description: jobData.description || '',
         vehicleDetails: jobData.vehicleDetails || '',
-        expiresAt: new Date(Date.now() + 60000).toISOString()
+        vehicle: jobData.vehicle || {},
+        additionalDetails: jobData.additionalDetails || {},
+        expiresAt: new Date(Date.now() + 60000).toISOString() // Expires in 60 seconds
       }
     };
 
     let sentCount = 0;
+    
+    // Track which providers received this job
+    if (!this.jobProviderList.has(jobId)) {
+      this.jobProviderList.set(jobId, new Set());
+    }
+    
     providerIds.forEach(providerId => {
       if (this.sendToUser(providerId, message)) {
         sentCount++;
+        this.jobProviderList.get(jobId).add(providerId);
+        console.log(`📨 Job ${jobId} sent to provider ${providerId}`);
       }
     });
+
+    // ✅ Set expiry timer for this job (60 seconds)
+    if (this.jobExpiryTimers.has(jobId)) {
+      clearTimeout(this.jobExpiryTimers.get(jobId));
+    }
+    
+    const expiryTimer = setTimeout(() => {
+      this.handleJobExpiry(jobId, jobData.bookingId);
+    }, 60000); // 60 seconds
+    
+    this.jobExpiryTimers.set(jobId, expiryTimer);
+    console.log(`⏰ Expiry timer set for job ${jobId} (60 seconds)`);
 
     return sentCount;
   }
@@ -1047,6 +1150,7 @@ class WebSocketManager {
       totalActiveProviders: this.userLocations.size,
       totalActiveJobs: this.providerCurrentJobs.size,
       totalJobRooms: this.jobRooms.size,
+      totalPendingJobs: this.jobProviderList.size,
       connectionsByType: {
         customers: Array.from(this.clients.values()).filter(c => c.userType === 'customer').length,
         providers: Array.from(this.clients.values()).filter(c => c.userType === 'provider').length
