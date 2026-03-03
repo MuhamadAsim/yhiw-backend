@@ -27,6 +27,8 @@ import customerRoutes from "./routes/customerRoutes.js";
 import providerRoutes from "./routes/providerRoutes.js";
 import jobRoutes from "./routes/jobRoutes.js";
 import websocketRoutes from "./routes/websocketRoutes.js";
+import testRoutes from './routes/testRoutes.js';
+
 
 
 
@@ -37,6 +39,8 @@ app.use("/api/customer", customerRoutes);
 app.use("/api/provider", providerRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/ws", websocketRoutes); // For WebSocket status endpoints
+app.use('/api/test', testRoutes);
+
 
 // WebSocket health check endpoint
 app.get("/api/ws/stats", (req, res) => {
