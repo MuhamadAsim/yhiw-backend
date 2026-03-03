@@ -1,77 +1,30 @@
-// controllers/providerController.js
-import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
+// ==================== PROVIDER CONTROLLER ====================
 import User from '../models/userModel.js';
 import Job from '../models/jobModel.js';
+import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
+import mongoose from 'mongoose';
 
-// ==================== LOCATION & STATUS CONTROLLERS ====================
-
-// Update provider online status
-export const updateProviderStatus = async (req, res) => {
-  try {
-    const { providerId } = req.params;
-    const { isOnline } = req.body;
-
-    // Find provider by firebaseUserId
-    const provider = await User.findOne({ 
-      firebaseUserId: providerId,
-      role: 'provider' 
-    });
-
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: 'Provider not found'
-      });
-    }
-
-    // Find or create live status
-    let liveStatus = await ProviderLiveStatus.findOne({ providerId: provider._id });
-
-    if (!liveStatus) {
-      liveStatus = new ProviderLiveStatus({
-        providerId: provider._id,
-        isOnline,
-        lastSeen: new Date()
-      });
-    } else {
-      liveStatus.isOnline = isOnline;
-      liveStatus.lastSeen = new Date();
-    }
-
-    await liveStatus.save();
-
-    res.status(200).json({
-      success: true,
-      data: {
-        isOnline: liveStatus.isOnline,
-        isAvailable: liveStatus.isAvailable,
-        lastSeen: liveStatus.lastSeen
-      }
-    });
-
-  } catch (error) {
-    console.error('Error updating provider status:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update provider status',
-      error: error.message
-    });
-  }
-};
-
-// Update provider location
+// ==================== UPDATE PROVIDER LOCATION ====================
 export const updateProviderLocation = async (req, res) => {
   try {
-    const { providerId } = req.params;
+    const { providerId } = req.params; // This is the firebaseUserId from URL
     const { latitude, longitude, address, isManual, timestamp } = req.body;
 
-    console.log(`📍 Location update received for provider ${providerId}:`, {
-      latitude,
-      longitude,
-      address,
-      isManual: isManual ? 'MANUAL' : 'AUTO',
-      timestamp
-    });
+    console.log('='.repeat(50));
+    console.log('📍 UPDATE PROVIDER LOCATION');
+    console.log('='.repeat(50));
+    console.log('Provider ID (firebaseUserId):', providerId);
+    console.log('Location:', { latitude, longitude, address });
+    console.log('Mode:', isManual ? 'MANUAL' : 'AUTO');
+    console.log('Timestamp:', timestamp);
+
+    // Validate required fields
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude and longitude are required'
+      });
+    }
 
     // Find provider by firebaseUserId
     const provider = await User.findOne({ 
@@ -80,20 +33,32 @@ export const updateProviderLocation = async (req, res) => {
     });
 
     if (!provider) {
-      console.error('❌ Provider not found:', providerId);
+      console.error('❌ Provider not found in User collection:', providerId);
       return res.status(404).json({
         success: false,
         message: 'Provider not found'
       });
     }
 
-    // Find or create live status
-    let liveStatus = await ProviderLiveStatus.findOne({ providerId: provider._id });
+    console.log('✅ Provider found in database:', {
+      id: provider._id,
+      name: provider.fullName,
+      firebaseUserId: provider.firebaseUserId
+    });
+
+    // Find or create live status - search by both firebaseUserId and providerId
+    let liveStatus = await ProviderLiveStatus.findOne({ 
+      $or: [
+        { firebaseUserId: providerId },
+        { providerId: provider._id }
+      ]
+    });
 
     if (!liveStatus) {
-      console.log('📝 Creating new live status record for provider:', provider._id);
+      console.log('📝 Creating new live status record for provider');
       liveStatus = new ProviderLiveStatus({
         providerId: provider._id,
+        firebaseUserId: providerId, // CRITICAL: Set this!
         currentLocation: {
           type: 'Point',
           coordinates: [longitude, latitude], // MongoDB expects [longitude, latitude]
@@ -101,22 +66,24 @@ export const updateProviderLocation = async (req, res) => {
           address: address || '',
           lastUpdated: new Date()
         },
-        lastSeen: new Date(),
-        isOnline: true
+        isOnline: true,
+        isAvailable: true,
+        lastSeen: new Date()
       });
     } else {
-      // IMPORTANT: Check if existing location is manual and new update is NOT manual
+      // Check if existing location is manual and new update is NOT manual
       const existingIsManual = liveStatus.currentLocation?.isManual || false;
       
       console.log(`🔄 Existing location mode: ${existingIsManual ? 'MANUAL' : 'AUTO'}`);
       console.log(`🔄 New update mode: ${isManual ? 'MANUAL' : 'AUTO'}`);
 
+      // IMPORTANT: Preserve manual location if it exists and this is an auto update
       if (existingIsManual && !isManual) {
-        // This is an auto update trying to override a manual location - PRESERVE MANUAL LOCATION
         console.log('✅ Preserving manual location, ignoring auto update');
         
         // Still update lastSeen to show provider is active
         liveStatus.lastSeen = new Date();
+        liveStatus.isOnline = true;
         await liveStatus.save();
         
         return res.status(200).json({
@@ -145,10 +112,23 @@ export const updateProviderLocation = async (req, res) => {
         lastUpdated: new Date()
       };
       liveStatus.lastSeen = new Date();
+      liveStatus.isOnline = true;
+      
+      // Make sure firebaseUserId is set (in case it was missing)
+      if (!liveStatus.firebaseUserId) {
+        liveStatus.firebaseUserId = providerId;
+      }
     }
 
     await liveStatus.save();
-    console.log('✅ Location updated successfully');
+    console.log('✅ Location updated successfully in database');
+    console.log('📊 Live Status:', {
+      providerId: liveStatus.providerId,
+      firebaseUserId: liveStatus.firebaseUserId,
+      location: liveStatus.currentLocation.coordinates,
+      isManual: liveStatus.currentLocation.isManual,
+      lastSeen: liveStatus.lastSeen
+    });
 
     res.status(200).json({
       success: true,
@@ -166,6 +146,19 @@ export const updateProviderLocation = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error updating provider location:', error);
+    console.error('Error stack:', error.stack);
+    
+    // Check for validation errors
+    if (error.name === 'ValidationError') {
+      console.error('Validation Error Details:', error.errors);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        error: error.message,
+        details: error.errors
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Failed to update provider location',
@@ -174,16 +167,16 @@ export const updateProviderLocation = async (req, res) => {
   }
 };
 
-// Get provider current status and location
+// ==================== GET PROVIDER STATUS ====================
 export const getProviderStatus = async (req, res) => {
   try {
-    const { providerId } = req.params;
+    const { providerId } = req.params; // firebaseUserId
 
-    const provider = await User.findOne({ 
-      firebaseUserId: providerId,
-      role: 'provider' 
-    });
+    console.log(`🔍 Getting status for provider: ${providerId}`);
 
+    // Find provider by firebaseUserId
+    const provider = await User.findOne({ firebaseUserId: providerId });
+    
     if (!provider) {
       return res.status(404).json({
         success: false,
@@ -191,42 +184,32 @@ export const getProviderStatus = async (req, res) => {
       });
     }
 
-    const liveStatus = await ProviderLiveStatus.findOne({ providerId: provider._id });
+    // Get live status
+    const liveStatus = await ProviderLiveStatus.findOne({ 
+      $or: [
+        { firebaseUserId: providerId },
+        { providerId: provider._id }
+      ]
+    });
 
-    if (!liveStatus) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          isOnline: false,
-          isAvailable: true,
-          location: null,
-          lastSeen: null
-        }
-      });
-    }
+    const statusData = {
+      isOnline: liveStatus?.isOnline || false,
+      isAvailable: liveStatus?.isAvailable || true,
+      currentLocation: liveStatus?.currentLocation ? {
+        latitude: liveStatus.currentLocation.coordinates[1],
+        longitude: liveStatus.currentLocation.coordinates[0],
+        address: liveStatus.currentLocation.address,
+        isManual: liveStatus.currentLocation.isManual,
+        lastUpdated: liveStatus.currentLocation.lastUpdated
+      } : null,
+      currentJobId: liveStatus?.currentJobId || null,
+      currentBookingId: liveStatus?.currentBookingId || null,
+      lastSeen: liveStatus?.lastSeen || provider.lastSeen
+    };
 
-    // Calculate if provider is actually online based on lastSeen
-    const now = new Date();
-    const lastSeen = new Date(liveStatus.lastSeen);
-    const timeDiffInSeconds = Math.floor((now - lastSeen) / 1000);
-    const isActuallyOnline = liveStatus.isOnline && timeDiffInSeconds <= 90;
-
-    res.status(200).json({
+    res.json({
       success: true,
-      data: {
-        isOnline: liveStatus.isOnline,
-        isActuallyOnline,
-        isAvailable: liveStatus.isAvailable,
-        location: liveStatus.currentLocation ? {
-          latitude: liveStatus.currentLocation.coordinates[1],
-          longitude: liveStatus.currentLocation.coordinates[0],
-          address: liveStatus.currentLocation.address || '',
-          isManual: liveStatus.currentLocation.isManual || false
-        } : null,
-        lastSeen: liveStatus.lastSeen,
-        timeSinceLastUpdate: timeDiffInSeconds,
-        currentTaskId: liveStatus.currentTaskId
-      }
+      data: statusData
     });
 
   } catch (error) {
@@ -239,92 +222,487 @@ export const getProviderStatus = async (req, res) => {
   }
 };
 
-// Get nearby available providers (for customers)
+// ==================== UPDATE PROVIDER STATUS ====================
+export const updateProviderStatus = async (req, res) => {
+  try {
+    const { providerId } = req.params; // firebaseUserId
+    const { isOnline, isAvailable, currentJobId, currentBookingId } = req.body;
+
+    console.log(`🔄 Updating status for provider: ${providerId}`, {
+      isOnline,
+      isAvailable,
+      currentJobId,
+      currentBookingId
+    });
+
+    // Find provider by firebaseUserId
+    const provider = await User.findOne({ firebaseUserId: providerId });
+    
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Provider not found'
+      });
+    }
+
+    // Update or create live status
+    const liveStatus = await ProviderLiveStatus.findOneAndUpdate(
+      { $or: [{ firebaseUserId: providerId }, { providerId: provider._id }] },
+      {
+        $set: {
+          providerId: provider._id,
+          firebaseUserId: providerId,
+          isOnline: isOnline !== undefined ? isOnline : true,
+          isAvailable: isAvailable !== undefined ? isAvailable : true,
+          currentJobId: currentJobId || null,
+          currentBookingId: currentBookingId || null,
+          lastSeen: new Date()
+        }
+      },
+      { 
+        upsert: true,
+        new: true,
+        runValidators: true
+      }
+    );
+
+    console.log('✅ Provider status updated:', {
+      isOnline: liveStatus.isOnline,
+      isAvailable: liveStatus.isAvailable,
+      lastSeen: liveStatus.lastSeen
+    });
+
+    res.json({
+      success: true,
+      data: {
+        isOnline: liveStatus.isOnline,
+        isAvailable: liveStatus.isAvailable,
+        currentJobId: liveStatus.currentJobId,
+        currentBookingId: liveStatus.currentBookingId,
+        lastSeen: liveStatus.lastSeen
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating provider status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update provider status',
+      error: error.message
+    });
+  }
+};
+
+// ==================== GET PROVIDER PERFORMANCE ====================
+export const getProviderPerformance = async (req, res) => {
+  try {
+    const { providerId } = req.params; // firebaseUserId
+
+    console.log(`📊 Getting performance for provider: ${providerId}`);
+
+    // Find provider by firebaseUserId
+    const provider = await User.findOne({ firebaseUserId: providerId });
+    
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Provider not found'
+      });
+    }
+
+    // Get today's jobs
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const todayJobs = await Job.find({
+      providerId: provider._id,
+      status: 'completed',
+      completedAt: { $gte: today }
+    });
+
+    // Calculate today's earnings (assuming 85% of job price)
+    const todayEarnings = todayJobs.reduce((sum, job) => sum + (job.price * 0.85), 0);
+    
+    // Calculate total hours worked today (rough estimate - 30 min per job)
+    const todayHours = todayJobs.length * 0.5;
+
+    const performanceData = {
+      earnings: todayEarnings,
+      jobs: todayJobs.length,
+      hours: todayHours,
+      rating: provider.rating || 0
+    };
+
+    console.log('✅ Performance data:', performanceData);
+
+    res.json({
+      success: true,
+      data: performanceData
+    });
+
+  } catch (error) {
+    console.error('Error getting provider performance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get provider performance',
+      error: error.message
+    });
+  }
+};
+
+// ==================== GET PROVIDER PERFORMANCE WITH JOBS ====================
+export const getProviderPerformanceWithJobs = async (req, res) => {
+  try {
+    const { providerId } = req.params; // firebaseUserId
+
+    console.log(`📊 Getting detailed performance for provider: ${providerId}`);
+
+    // Find provider by firebaseUserId
+    const provider = await User.findOne({ firebaseUserId: providerId });
+    
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Provider not found'
+      });
+    }
+
+    // Get today's jobs
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const todayJobs = await Job.find({
+      providerId: provider._id,
+      status: 'completed',
+      completedAt: { $gte: today }
+    });
+
+    // Calculate today's earnings (assuming 85% of job price)
+    const todayEarnings = todayJobs.reduce((sum, job) => sum + (job.price * 0.85), 0);
+    
+    // Calculate total hours worked today
+    const todayHours = todayJobs.length * 0.5;
+
+    // Get weekly stats
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    
+    const weeklyJobs = await Job.find({
+      providerId: provider._id,
+      status: 'completed',
+      completedAt: { $gte: weekAgo }
+    });
+
+    const weeklyEarnings = weeklyJobs.reduce((sum, job) => sum + (job.price * 0.85), 0);
+
+    // Get monthly stats
+    const monthAgo = new Date();
+    monthAgo.setMonth(monthAgo.getMonth() - 1);
+    
+    const monthlyJobs = await Job.find({
+      providerId: provider._id,
+      status: 'completed',
+      completedAt: { $gte: monthAgo }
+    });
+
+    const monthlyEarnings = monthlyJobs.reduce((sum, job) => sum + (job.price * 0.85), 0);
+
+    // Get all-time stats
+    const allJobs = await Job.find({
+      providerId: provider._id,
+      status: 'completed'
+    });
+
+    const totalEarnings = allJobs.reduce((sum, job) => sum + (job.price * 0.85), 0);
+
+    const performanceData = {
+      today: {
+        earnings: todayEarnings,
+        jobs: todayJobs.length,
+        hours: todayHours
+      },
+      weekly: {
+        earnings: weeklyEarnings,
+        jobs: weeklyJobs.length
+      },
+      monthly: {
+        earnings: monthlyEarnings,
+        jobs: monthlyJobs.length
+      },
+      allTime: {
+        earnings: totalEarnings,
+        jobs: allJobs.length,
+        rating: provider.rating || 0
+      }
+    };
+
+    console.log('✅ Detailed performance data:', performanceData);
+
+    res.json({
+      success: true,
+      data: performanceData
+    });
+
+  } catch (error) {
+    console.error('Error getting provider detailed performance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get provider detailed performance',
+      error: error.message
+    });
+  }
+};
+
+// ==================== GET PROVIDER RECENT JOBS ====================
+export const getProviderRecentJobs = async (req, res) => {
+  try {
+    const { providerId } = req.params; // firebaseUserId
+
+    console.log(`📋 Getting recent jobs for provider: ${providerId}`);
+
+    // Find provider by firebaseUserId
+    const provider = await User.findOne({ firebaseUserId: providerId });
+    
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Provider not found'
+      });
+    }
+
+    // Get recent jobs (last 5)
+    const recentJobs = await Job.find({ 
+      providerId: provider._id,
+      status: { $in: ['completed', 'cancelled'] }
+    })
+    .sort({ completedAt: -1, cancelledAt: -1 })
+    .limit(5)
+    .select('title price status completedAt serviceType');
+
+    const formattedJobs = recentJobs.map(job => ({
+      id: job._id,
+      title: job.title || job.serviceType || 'Service',
+      price: `${(job.price || 0).toFixed(2)} BHD`,
+      status: job.status === 'completed' ? 'Completed' : 'Cancelled',
+      time: job.completedAt 
+        ? formatTimeAgo(job.completedAt) 
+        : job.cancelledAt 
+          ? formatTimeAgo(job.cancelledAt) 
+          : 'Recently'
+    }));
+
+    res.json({
+      success: true,
+      data: formattedJobs
+    });
+
+  } catch (error) {
+    console.error('Error getting provider recent jobs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get provider recent jobs',
+      error: error.message
+    });
+  }
+};
+
+// ==================== GET PROVIDER SERVICES ====================
+export const getProviderServices = async (req, res) => {
+  try {
+    const { providerId } = req.params; // firebaseUserId
+
+    console.log(`🔧 Getting services for provider: ${providerId}`);
+
+    // Find provider by firebaseUserId
+    const provider = await User.findOne({ firebaseUserId: providerId });
+    
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Provider not found'
+      });
+    }
+
+    // Get live status for service categories
+    const liveStatus = await ProviderLiveStatus.findOne({ 
+      $or: [
+        { firebaseUserId: providerId },
+        { providerId: provider._id }
+      ]
+    });
+
+    // Return services (from provider's metadata or live status)
+    const services = liveStatus?.serviceCategories || [
+      'Towing',
+      'Fuel Delivery',
+      'Battery Replacement',
+      'Tire Replacement'
+    ];
+
+    res.json({
+      success: true,
+      data: services
+    });
+
+  } catch (error) {
+    console.error('Error getting provider services:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get provider services',
+      error: error.message
+    });
+  }
+};
+
+// ==================== UPDATE PROVIDER SERVICES ====================
+export const updateProviderServices = async (req, res) => {
+  try {
+    const { providerId } = req.params; // firebaseUserId
+    const { services } = req.body;
+
+    console.log(`🔧 Updating services for provider: ${providerId}`, services);
+
+    // Find provider by firebaseUserId
+    const provider = await User.findOne({ firebaseUserId: providerId });
+    
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Provider not found'
+      });
+    }
+
+    // Update live status with service categories
+    const liveStatus = await ProviderLiveStatus.findOneAndUpdate(
+      { $or: [{ firebaseUserId: providerId }, { providerId: provider._id }] },
+      {
+        $set: {
+          providerId: provider._id,
+          firebaseUserId: providerId,
+          serviceCategories: services,
+          lastSeen: new Date()
+        }
+      },
+      { 
+        upsert: true,
+        new: true
+      }
+    );
+
+    res.json({
+      success: true,
+      data: liveStatus.serviceCategories
+    });
+
+  } catch (error) {
+    console.error('Error updating provider services:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update provider services',
+      error: error.message
+    });
+  }
+};
+
+// ==================== GET NEARBY PROVIDERS ====================
 export const getNearbyProviders = async (req, res) => {
   try {
-    const { latitude, longitude, maxDistance = 10000 } = req.query; // maxDistance in meters, default 10km
+    const { lat, lng, radius = 10, serviceType } = req.query;
 
-    if (!latitude || !longitude) {
+    console.log(`📍 Finding nearby providers near [${lat}, ${lng}] within ${radius}km`);
+
+    if (!lat || !lng) {
       return res.status(400).json({
         success: false,
         message: 'Latitude and longitude are required'
       });
     }
 
-    // Only get providers who are online AND have recent activity (last 90 seconds)
-    const ninetySecondsAgo = new Date(Date.now() - 90 * 1000);
+    // Parse coordinates
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    const maxDistance = parseFloat(radius) * 1000; // Convert km to meters
 
-    const providers = await ProviderLiveStatus.find({
+    // Build query
+    const query = {
       isOnline: true,
       isAvailable: true,
-      lastSeen: { $gte: ninetySecondsAgo },
       currentLocation: {
         $near: {
           $geometry: {
             type: 'Point',
-            coordinates: [parseFloat(longitude), parseFloat(latitude)]
+            coordinates: [longitude, latitude]
           },
-          $maxDistance: parseInt(maxDistance)
+          $maxDistance: maxDistance
         }
       }
-    }).populate('providerId', 'fullName rating totalJobsCompleted profileImage serviceType');
+    };
 
-    const formattedProviders = providers.map(provider => {
-      const providerData = provider.providerId;
-      const distance = calculateDistance(
-        parseFloat(latitude), 
-        parseFloat(longitude), 
-        provider.currentLocation.coordinates[1], 
-        provider.currentLocation.coordinates[0]
-      );
+    // Add service type filter if provided
+    if (serviceType) {
+      query.serviceCategories = serviceType;
+    }
 
-      return {
-        providerId: providerData.firebaseUserId,
-        name: providerData.fullName,
-        rating: providerData.rating || 0,
-        jobsCompleted: providerData.totalJobsCompleted || 0,
-        serviceType: providerData.serviceType || [],
-        profileImage: providerData.profileImage || null,
-        location: {
-          latitude: provider.currentLocation.coordinates[1],
-          longitude: provider.currentLocation.coordinates[0],
-          address: provider.currentLocation.address || '',
-          isManual: provider.currentLocation.isManual || false
-        },
-        distance: distance, // in km
-        lastSeen: provider.lastSeen
-      };
-    });
+    // Find nearby providers
+    const providers = await ProviderLiveStatus.find(query)
+      .populate('providerId', 'fullName rating profileImage phoneNumber')
+      .limit(20);
 
-    // Sort by distance
-    formattedProviders.sort((a, b) => a.distance - b.distance);
+    console.log(`✅ Found ${providers.length} nearby providers`);
 
-    res.status(200).json({
+    // Format response
+    const formattedProviders = providers.map(p => ({
+      id: p.providerId?._id,
+      firebaseUserId: p.firebaseUserId,
+      name: p.providerId?.fullName || 'Provider',
+      rating: p.providerId?.rating || 0,
+      profileImage: p.providerId?.profileImage,
+      location: {
+        latitude: p.currentLocation.coordinates[1],
+        longitude: p.currentLocation.coordinates[0],
+        address: p.currentLocation.address,
+        isManual: p.currentLocation.isManual,
+        lastUpdated: p.currentLocation.lastUpdated
+      },
+      distance: calculateDistance(
+        latitude,
+        longitude,
+        p.currentLocation.coordinates[1],
+        p.currentLocation.coordinates[0]
+      ),
+      services: p.serviceCategories || []
+    }));
+
+    res.json({
       success: true,
       data: formattedProviders
     });
 
   } catch (error) {
-    console.error('Error getting nearby providers:', error);
+    console.error('Error finding nearby providers:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to get nearby providers',
+      message: 'Failed to find nearby providers',
       error: error.message
     });
   }
 };
 
-// ==================== PERFORMANCE CONTROLLERS ====================
-
-// Get provider profile and stats (from User model)
+// ==================== GET PROVIDER PROFILE ====================
 export const getProviderProfile = async (req, res) => {
   try {
-    const { providerId } = req.params;
+    const { providerId } = req.params; // firebaseUserId or MongoDB _id
 
-    const provider = await User.findOne({ 
-      firebaseUserId: providerId,
-      role: 'provider' 
-    }).select('-savedLocations -recentLocations'); // Exclude location arrays
+    console.log(`👤 Getting profile for provider: ${providerId}`);
+
+    // Try to find by firebaseUserId first
+    let provider = await User.findOne({ 
+      $or: [
+        { firebaseUserId: providerId },
+        { _id: mongoose.Types.ObjectId.isValid(providerId) ? providerId : null }
+      ],
+      role: 'provider'
+    }).select('-password');
 
     if (!provider) {
       return res.status(404).json({
@@ -333,22 +711,37 @@ export const getProviderProfile = async (req, res) => {
       });
     }
 
-    res.status(200).json({
+    // Get live status
+    const liveStatus = await ProviderLiveStatus.findOne({ 
+      $or: [
+        { firebaseUserId: provider.firebaseUserId },
+        { providerId: provider._id }
+      ]
+    });
+
+    const profileData = {
+      id: provider._id,
+      firebaseUserId: provider.firebaseUserId,
+      fullName: provider.fullName,
+      email: provider.email,
+      phoneNumber: provider.phoneNumber,
+      profileImage: provider.profileImage,
+      rating: provider.rating || 0,
+      totalJobsCompleted: provider.totalJobsCompleted || 0,
+      vehicleDetails: provider.vehicleDetails,
+      services: liveStatus?.serviceCategories || [],
+      isOnline: liveStatus?.isOnline || false,
+      currentLocation: liveStatus?.currentLocation ? {
+        latitude: liveStatus.currentLocation.coordinates[1],
+        longitude: liveStatus.currentLocation.coordinates[0],
+        address: liveStatus.currentLocation.address
+      } : null,
+      lastSeen: liveStatus?.lastSeen || provider.lastSeen
+    };
+
+    res.json({
       success: true,
-      data: {
-        firebaseUserId: provider.firebaseUserId,
-        fullName: provider.fullName,
-        email: provider.email,
-        phoneNumber: provider.phoneNumber,
-        profileImage: provider.profileImage,
-        serviceType: provider.serviceType,
-        description: provider.description,
-        rating: provider.rating || 0,
-        totalJobsCompleted: provider.totalJobsCompleted || 0,
-        totalEarnings: provider.totalEarnings || 0,
-        totalReviews: provider.totalReviews || 0,
-        status: provider.status
-      }
+      data: profileData
     });
 
   } catch (error) {
@@ -361,142 +754,47 @@ export const getProviderProfile = async (req, res) => {
   }
 };
 
-// Get provider performance data (from User model stats)
-export const getProviderPerformance = async (req, res) => {
-  try {
-    const { providerId } = req.params;
-
-    const provider = await User.findOne({ 
-      firebaseUserId: providerId,
-      role: 'provider' 
-    }).select('rating totalJobsCompleted totalEarnings totalReviews');
-
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: 'Provider not found'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: {
-        earnings: provider.totalEarnings || 0,
-        jobs: provider.totalJobsCompleted || 0,
-        hours: 0, // Will be calculated from jobs when Job model is created
-        rating: provider.rating || 0,
-        reviews: provider.totalReviews || 0
-      }
-    });
-
-  } catch (error) {
-    console.error('Error getting provider performance:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get provider performance',
-      error: error.message
-    });
-  }
-};
-
-// Enhanced performance controller using Job model
-export const getProviderPerformanceWithJobs = async (req, res) => {
-  try {
-    const { providerId } = req.params;
-    const { period = 'today' } = req.query; // today, week, month, year
-
-    const provider = await User.findOne({ 
-      firebaseUserId: providerId,
-      role: 'provider' 
-    });
-
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: 'Provider not found'
-      });
-    }
-
-    // Calculate date range
-    const now = new Date();
-    let startDate = new Date();
-
-    switch(period) {
-      case 'today':
-        startDate.setHours(0, 0, 0, 0);
-        break;
-      case 'week':
-        startDate.setDate(now.getDate() - 7);
-        break;
-      case 'month':
-        startDate.setMonth(now.getMonth() - 1);
-        break;
-      case 'year':
-        startDate.setFullYear(now.getFullYear() - 1);
-        break;
-      default:
-        startDate.setHours(0, 0, 0, 0);
-    }
-
-    // Get completed jobs in the period
-    const jobs = await Job.find({
-      providerId: provider._id,
-      status: 'completed',
-      completedAt: { $gte: startDate, $lte: now }
-    });
-
-    // Calculate metrics
-    const earnings = jobs.reduce((sum, job) => sum + job.price, 0);
-    const jobCount = jobs.length;
-    const hours = jobs.reduce((sum, job) => sum + (job.actualDuration / 60), 0);
-    
-    // Calculate average rating from jobs with reviews
-    const reviewedJobs = jobs.filter(job => job.customerRating);
-    const avgRating = reviewedJobs.length > 0 
-      ? reviewedJobs.reduce((sum, job) => sum + job.customerRating, 0) / reviewedJobs.length
-      : provider.rating || 0;
-
-    res.status(200).json({
-      success: true,
-      data: {
-        earnings: Math.round(earnings * 100) / 100,
-        jobs: jobCount,
-        hours: Math.round(hours * 10) / 10,
-        rating: Math.round(avgRating * 10) / 10,
-        period,
-        reviewedJobs: reviewedJobs.length
-      }
-    });
-
-  } catch (error) {
-    console.error('Error getting provider performance:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get provider performance',
-      error: error.message
-    });
-  }
-};
-
-// ==================== HELPER FUNCTIONS ====================
-
-// Calculate distance between two coordinates in kilometers (Haversine formula)
-function calculateDistance(lat1, lon1, lat2, lon2) {
+// Helper function to calculate distance between two coordinates (Haversine formula)
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371; // Earth's radius in km
   const dLat = deg2rad(lat2 - lat1);
   const dLon = deg2rad(lon2 - lon1);
-  
   const a = 
     Math.sin(dLat/2) * Math.sin(dLat/2) +
     Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
     Math.sin(dLon/2) * Math.sin(dLon/2);
-  
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   const distance = R * c;
   
-  return Math.round(distance * 10) / 10; // Round to 1 decimal place
-}
+  return distance < 1 
+    ? `${Math.round(distance * 1000)} m` 
+    : `${distance.toFixed(1)} km`;
+};
 
-function deg2rad(deg) {
+const deg2rad = (deg) => {
   return deg * (Math.PI/180);
-}
+};
+
+// Helper function to format time ago
+const formatTimeAgo = (date) => {
+  const now = new Date();
+  const diffMinutes = Math.floor((now.getTime() - date.getTime()) / 60000);
+  
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes} min ago`;
+  if (diffMinutes < 120) return '1 hour ago';
+  return `${Math.floor(diffMinutes / 60)} hours ago`;
+};
+
+export default {
+  updateProviderLocation,
+  getProviderStatus,
+  updateProviderStatus,
+  getProviderPerformance,
+  getProviderPerformanceWithJobs,
+  getProviderRecentJobs,
+  getProviderServices,
+  updateProviderServices,
+  getNearbyProviders,
+  getProviderProfile
+};

@@ -6,8 +6,10 @@ import {
   getNearbyProviders,
   getProviderProfile,
   getProviderPerformance,
-  getProviderPerformanceWithJobs // Add this
-
+  getProviderPerformanceWithJobs,
+  getProviderRecentJobs,
+  getProviderServices,
+  updateProviderServices
 } from '../controllers/providerController.js';
 
 const router = express.Router();
@@ -31,7 +33,16 @@ router.get('/:providerId/profile', getProviderProfile);
 
 // Get provider performance stats
 router.get('/:providerId/performance', getProviderPerformance);
-router.get('/:providerId/performance/detailed', getProviderPerformanceWithJobs); 
+router.get('/:providerId/performance/detailed', getProviderPerformanceWithJobs);
 
+// Get provider recent jobs
+router.get('/:providerId/recent-jobs', getProviderRecentJobs);
+
+// ==================== SERVICES ROUTES ====================
+// Get provider services
+router.get('/:providerId/services', getProviderServices);
+
+// Update provider services
+router.put('/:providerId/services', updateProviderServices);
 
 export default router;
