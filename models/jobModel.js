@@ -125,7 +125,7 @@ const providerDetailsSchema = new mongoose.Schema({
 }, { _id: false });
 
 const jobSchema = new mongoose.Schema({
-  // IDs
+  // IDs - Now these will be set by the controller, not auto-generated
   jobNumber: {
     type: String,
     unique: true,
@@ -134,6 +134,7 @@ const jobSchema = new mongoose.Schema({
   bookingId: {  
     type: String,
     unique: true,
+    required: true // Make it required since controller will provide it
   },
   providerId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -324,16 +325,8 @@ const jobSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Pre-save middleware to generate bookingId
-jobSchema.pre('save', function(next) {
-  if (!this.bookingId) {
-    this.bookingId = `BK-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  }
-  if (!this.jobNumber) {
-    this.jobNumber = `JOB-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-  }
-  next();
-});
+// REMOVED: Pre-save middleware for ID generation
+// Now IDs must be provided by the controller
 
 // Indexes for better query performance
 jobSchema.index({ providerId: 1, createdAt: -1 });
@@ -345,7 +338,8 @@ jobSchema.index({ completedAt: 1 });
 jobSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 });
 jobSchema.index({ 'pickup.coordinates': '2dsphere' });
 jobSchema.index({ serviceId: 1 });
-jobSchema.index({ urgency: 1 });
+// Removed urgency index since it's not a field in the schema
+// jobSchema.index({ urgency: 1 });
 
 const Job = mongoose.model('Job', jobSchema);
 export default Job;

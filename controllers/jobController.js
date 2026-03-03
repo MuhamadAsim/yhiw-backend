@@ -49,6 +49,12 @@ const generateJobNumber = () => {
   return `JOB-${year}${month}${day}-${random}`;
 };
 
+// Helper function to generate booking ID
+const generateBookingId = () => {
+  return `BK-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+};
+
+
 // Helper function for time ago
 const getTimeAgo = (date) => {
   const now = new Date();
@@ -430,10 +436,14 @@ export const findProvider = async (req, res) => {
       });
     }
 
+    // GENERATE IDs HERE (not in pre-save)
+    const bookingId = generateBookingId();
     const jobNumber = generateJobNumber();
-    console.log('Generated job number:', jobNumber);
+    
+    console.log('✅ Generated bookingId:', bookingId);
+    console.log('✅ Generated jobNumber:', jobNumber);
 
-    // Transform location data properly
+    // Transform location data properly for MongoDB
     const pickupLocation = {
       address: pickup?.address || 'Pickup location',
       latitude: pickup?.coordinates?.lat || 0,
@@ -452,8 +462,13 @@ export const findProvider = async (req, res) => {
         : [0, 0]
     } : undefined;
 
-    // Create job with proper structure
+    console.log('📍 Pickup location:', pickupLocation);
+    console.log('📍 Dropoff location:', dropoffLocation || 'Not provided');
+
+    // Create job with explicit IDs
     const job = new Job({
+      // Set IDs explicitly
+      bookingId,
       jobNumber,
       customerId,
       
@@ -483,12 +498,7 @@ export const findProvider = async (req, res) => {
       pickup: pickupLocation,
       dropoff: dropoffLocation,
       
-      // Status
-      status: 'pending',
-      requestedAt: new Date(),
-      estimatedDuration: 30,
-      
-      // Store all frontend data
+      // Store all frontend data in their respective schema fields
       vehicle: vehicle || {},
       customer: customer || {},
       additionalDetails: additionalDetails || {},
@@ -497,7 +507,12 @@ export const findProvider = async (req, res) => {
       locationSkipped: locationSkipped || false,
       selectedTip: payment?.selectedTip || 0,
       
-      // Metadata
+      // Status
+      status: 'pending',
+      requestedAt: new Date(),
+      estimatedDuration: 30,
+      
+      // Metadata (backup of all data)
       metadata: {
         vehicle,
         customer,
@@ -515,7 +530,7 @@ export const findProvider = async (req, res) => {
       }
     });
 
-    console.log('Attempting to save job...');
+    console.log('💾 Attempting to save job...');
     await job.save();
     console.log('✅ Job saved successfully with ID:', job._id);
     console.log('✅ Booking ID:', job.bookingId);
@@ -542,42 +557,61 @@ export const findProvider = async (req, res) => {
 
     console.log(`✅ Found ${eligibleProviders.length} eligible providers nearby`);
 
-    // Prepare job request data with ALL fields
+    // Prepare job request data for WebSocket with ALL fields
     const jobRequestData = {
+      // Core identifiers
       jobId: job._id.toString(),
       bookingId: job.bookingId,
       jobNumber: job.jobNumber,
+      
+      // Service info
       serviceType: serviceCategory,
       serviceName: serviceName,
+      serviceId: serviceId,
+      
+      // Pricing
       price: payment?.totalAmount || servicePrice,
+      estimatedEarnings: payment?.totalAmount || servicePrice,
+      
+      // Location
       pickupLocation: pickup?.address || 'Pickup location',
       pickupLat: pickup?.coordinates?.lat || 0,
       pickupLng: pickup?.coordinates?.lng || 0,
       dropoffLocation: dropoff?.address || null,
       dropoffLat: dropoff?.coordinates?.lat || null,
       dropoffLng: dropoff?.coordinates?.lng || null,
+      
+      // Customer info
       customerName: customer?.name || 'Customer',
       customerPhone: customer?.phone || '',
       customerId: customerId,
+      
+      // Job details
       distance: '0',
-      estimatedEarnings: payment?.totalAmount || servicePrice,
-      timestamp: new Date().toISOString(),
-      vehicle: vehicle || {},
-      additionalDetails: additionalDetails || {},
       urgency: additionalDetails?.urgency || 'normal',
       description: additionalDetails?.description || '',
       vehicleDetails: vehicle?.makeModel || '',
+      
+      // Vehicle info
+      vehicle: vehicle || {},
+      additionalDetails: additionalDetails || {},
+      
+      // Timestamps
+      timestamp: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60000).toISOString() // Expires in 60 seconds
     };
 
+    // Send via WebSocket if available
     const wsManager = req.app.get('wsManager');
     const providerIds = eligibleProviders
       .map(p => p.providerId?.firebaseUserId)
       .filter(id => id);
     
-    if (providerIds.length > 0) {
+    if (providerIds.length > 0 && wsManager) {
       const sentCount = wsManager.sendJobRequestToProviders(jobRequestData, providerIds);
-      console.log(`📨 Sent job request to ${sentCount} providers via WebSocket`);
+      console.log(`📨 Sent job request to ${sentCount}/${providerIds.length} providers via WebSocket`);
+    } else {
+      console.log('⚠️ No providers to notify or WebSocket manager not available');
     }
 
     return res.status(200).json({
@@ -585,6 +619,7 @@ export const findProvider = async (req, res) => {
       message: 'Searching for providers',
       bookingId: job.bookingId,
       jobNumber: job.jobNumber,
+      jobId: job._id,
       status: job.status,
       providersFound: eligibleProviders.length,
       estimatedWaitTime: eligibleProviders.length > 0 ? '30-60 seconds' : '2-3 minutes',
@@ -602,7 +637,6 @@ export const findProvider = async (req, res) => {
     });
   }
 };
-
 
 
 
