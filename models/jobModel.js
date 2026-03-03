@@ -132,10 +132,9 @@ const jobSchema = new mongoose.Schema({
     unique: true,
     required: true
   },
-  bookingId: {  // Add bookingId for frontend compatibility
+  bookingId: {  
     type: String,
     unique: true,
-    required: true
   },
   providerId: {
     type: mongoose.Schema.Types.ObjectId,
