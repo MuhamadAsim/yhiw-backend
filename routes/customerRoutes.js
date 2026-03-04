@@ -7,7 +7,7 @@ import {
     deleteLocation,
     addRecentLocation,
 } from '../controllers/customerController.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authMiddleware } from '../middleware/auth.js';
 
 
 const router = express.Router();
@@ -16,7 +16,7 @@ const router = express.Router();
 
 
 
-router.use(authenticateToken);
+router.use(authMiddleware);
 
 
 

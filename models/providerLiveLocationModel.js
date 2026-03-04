@@ -24,12 +24,6 @@ const providerLiveStatusSchema = new mongoose.Schema({
     default: true
   },
 
-  // Current active job (if any)
-  currentJobId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Job',
-    default: null
-  },
 
   // Current booking ID (for quick reference)
   currentBookingId: {

@@ -1,7 +1,7 @@
 // middleware/auth.js
 import jwt from 'jsonwebtoken';
 
-export const authenticateToken = (req, res, next) => {
+export const authMiddleware = (req, res, next) => {
   console.log('='.repeat(50));
   console.log('🔐 AUTH MIDDLEWARE CALLED');
   console.log('='.repeat(50));

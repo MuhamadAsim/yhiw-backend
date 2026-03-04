@@ -1,48 +1,38 @@
+// routes/providerRoutes.js
 import express from 'express';
+import { authMiddleware } from '../middleware/auth.js';
 import {
+  getAvailableJobs,
+  getAvailableJobsTest,
+  acceptJob,
   updateProviderStatus,
   updateProviderLocation,
   getProviderStatus,
-  getNearbyProviders,
-  getProviderProfile,
   getProviderPerformance,
-  getProviderPerformanceWithJobs,
-  getProviderRecentJobs,
-  getProviderServices,
-  updateProviderServices
+  getRecentJobs
 } from '../controllers/providerController.js';
+
 
 const router = express.Router();
 
-// ==================== LOCATION & STATUS ROUTES ====================
-// Update provider online status
-router.put('/:providerId/status', updateProviderStatus);
 
-// Update provider location
-router.post('/:providerId/location', updateProviderLocation);
+// All provider routes require authentication
+router.use(authMiddleware);
 
-// Get provider current status
-router.get('/:providerId/status', getProviderStatus);
+// Job endpoints
+router.get('/available-jobs', getAvailableJobs);
+router.get('/available-jobs-test', getAvailableJobsTest);
+router.post('/accept-job/:bookingId', acceptJob);
 
-// Get nearby available providers (for customers)
-router.get('/nearby', getNearbyProviders);
+// Provider status & location
+router.put('/:firebaseUserId/status', updateProviderStatus);
+router.get('/:firebaseUserId/status', getProviderStatus);
+router.post('/:firebaseUserId/location', updateProviderLocation);
 
-// ==================== PROFILE & PERFORMANCE ROUTES ====================
-// Get provider profile
-router.get('/:providerId/profile', getProviderProfile);
+// Performance & history
+router.get('/:firebaseUserId/performance', getProviderPerformance);
+router.get('/:firebaseUserId/recent-jobs', getRecentJobs);
 
-// Get provider performance stats
-router.get('/:providerId/performance', getProviderPerformance);
-router.get('/:providerId/performance/detailed', getProviderPerformanceWithJobs);
 
-// Get provider recent jobs
-router.get('/:providerId/recent-jobs', getProviderRecentJobs);
-
-// ==================== SERVICES ROUTES ====================
-// Get provider services
-router.get('/:providerId/services', getProviderServices);
-
-// Update provider services
-router.put('/:providerId/services', updateProviderServices);
 
 export default router;
