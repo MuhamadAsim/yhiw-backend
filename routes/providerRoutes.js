@@ -3,7 +3,6 @@ import express from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import {
   getAvailableJobs,
-  getAvailableJobsTest,
   acceptJob,
   updateProviderStatus,
   updateProviderLocation,
@@ -21,7 +20,6 @@ router.use(authMiddleware);
 
 // Job endpoints
 router.get('/available-jobs', getAvailableJobs);
-router.get('/available-jobs-test', getAvailableJobsTest);
 router.post('/accept-job/:bookingId', acceptJob);
 
 // Provider status & location

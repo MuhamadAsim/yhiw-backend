@@ -19,7 +19,7 @@ router.get('/:firebaseUserId', getUserByFirebaseId); // Signin
 
 
 
-router.use(authenticateToken);
+router.use(authMiddleware);
 
 // Protected routes (add authentication middleware later)
 router.put('/:firebaseUserId', updateUser); // Update profile
