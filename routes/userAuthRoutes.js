@@ -6,7 +6,7 @@ import {
 
 } from '../controllers/userAuthController.js';
 
-import { authenticateToken } from '../middleware/auth.js';
+import { authMiddleware} from '../middleware/auth.js';
 
 
 
