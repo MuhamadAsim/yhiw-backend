@@ -10,6 +10,10 @@ import User from '../models/userModel.js';
 
 export const createJobNotification = async (req, res) => {
   try {
+    console.log('\n🔵 ===== CREATE JOB NOTIFICATION STARTED =====');
+    console.log('📥 Received Request Body:', JSON.stringify(req.body, null, 2));
+    console.log('👤 User ID:', req.user.id);
+
     // Get the nested data structure from frontend
     const { 
       bookingId,
@@ -36,14 +40,58 @@ export const createJobNotification = async (req, res) => {
       version
     } = req.body;
 
+    // Log extracted values
+    console.log('\n📦 EXTRACTED VALUES:');
+    console.log('  bookingId:', bookingId);
+    console.log('  serviceId:', serviceId);
+    console.log('  serviceName:', serviceName);
+    console.log('  servicePrice:', servicePrice);
+    console.log('  serviceCategory:', serviceCategory);
+    
+    console.log('\n📍 PICKUP DATA:');
+    console.log('  pickup:', pickup);
+    
+    console.log('\n🚗 VEHICLE DATA (RAW):');
+    console.log('  vehicle:', vehicle);
+    console.log('  vehicle.type:', vehicle?.type);
+    console.log('  vehicle.makeModel:', vehicle?.makeModel);
+    console.log('  vehicle.year:', vehicle?.year);
+    console.log('  vehicle.color:', vehicle?.color);
+    console.log('  vehicle.licensePlate:', vehicle?.licensePlate);
+    
+    console.log('\n👤 CUSTOMER DATA:');
+    console.log('  customer:', customer);
+    
+    console.log('\n💰 PAYMENT DATA:');
+    console.log('  payment:', payment);
+    
+    console.log('\n🔧 ADDITIONAL DETAILS:');
+    console.log('  additionalDetails:', additionalDetails);
+
     // Check if notification already exists
+    console.log('\n🔍 Checking for existing notification with bookingId:', bookingId);
     const existing = await Notification.findOne({ bookingId });
     if (existing) {
+      console.log('❌ Booking already exists:', bookingId);
       return res.status(400).json({ error: 'Booking already exists' });
     }
+    console.log('✅ No existing notification found');
 
-    // Create notification with proper nested structure
-    const notification = new Notification({
+    // Prepare vehicle data with proper nested structure
+    const vehicleData = {
+      type: {
+        type: vehicle?.type || ''
+      },
+      makeModel: vehicle?.makeModel || '',
+      year: vehicle?.year || '',
+      color: vehicle?.color || '',
+      licensePlate: vehicle?.licensePlate || ''
+    };
+    console.log('\n🔄 PREPARED VEHICLE DATA (for schema):');
+    console.log('  vehicleData:', JSON.stringify(vehicleData, null, 2));
+
+    // Prepare notification data
+    const notificationData = {
       bookingId,
       customerId: req.user.id,
       
@@ -60,16 +108,8 @@ export const createJobNotification = async (req, res) => {
       },
       dropoff: dropoff || null,
       
-      // ✅ FIXED: Vehicle data matching the schema structure
-      vehicle: {
-        type: {
-          type: vehicle?.type || ''  // Notice the nested structure
-        },
-        makeModel: vehicle?.makeModel || '',
-        year: vehicle?.year || '',
-        color: vehicle?.color || '',
-        licensePlate: vehicle?.licensePlate || ''
-      },
+      // Vehicle data
+      vehicle: vehicleData,
       
       // Customer contact (minimal - name and phone only as per schema)
       customer: {
@@ -105,9 +145,24 @@ export const createJobNotification = async (req, res) => {
       
       // Status
       status: 'pending'
-    });
+    };
 
+    console.log('\n📦 FINAL NOTIFICATION DATA TO SAVE:');
+    console.log(JSON.stringify(notificationData, null, 2));
+
+    // Create notification with proper nested structure
+    const notification = new Notification(notificationData);
+
+    console.log('\n💾 Attempting to save notification...');
     await notification.save();
+    console.log('✅ Notification saved successfully!');
+    console.log('🆔 Saved notification ID:', notification._id);
+    console.log('📊 Saved notification status:', notification.status);
+
+    console.log('\n📤 SENDING RESPONSE:');
+    console.log('  success: true');
+    console.log('  bookingId:', bookingId);
+    console.log('🔵 ===== CREATE JOB NOTIFICATION COMPLETED =====\n');
 
     res.status(201).json({
       success: true,
@@ -116,10 +171,30 @@ export const createJobNotification = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Create notification error:', error);
+    console.error('\n❌❌❌ CREATE NOTIFICATION ERROR ❌❌❌');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Full error:', error);
+    
+    if (error.name === 'ValidationError') {
+      console.error('\n📋 VALIDATION ERRORS:');
+      Object.keys(error.errors).forEach(field => {
+        console.error(`  ${field}:`, error.errors[field].message);
+        console.error(`    Value:`, error.errors[field].value);
+        console.error(`    Kind:`, error.errors[field].kind);
+        console.error(`    Path:`, error.errors[field].path);
+      });
+    }
+    
+    console.log('\n📤 SENDING ERROR RESPONSE');
+    console.log('🔵 ===== CREATE JOB NOTIFICATION FAILED =====\n');
+    
     res.status(500).json({ error: error.message });
   }
 };
+
+
+
 
 
 export const checkJobStatus = async (req, res) => {
