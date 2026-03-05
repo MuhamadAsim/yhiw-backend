@@ -70,6 +70,8 @@ export const getAvailableJobs = async (req, res) => {
   }
 };
 
+
+
 export const acceptJob = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -110,7 +112,16 @@ export const acceptJob = async (req, res) => {
         serviceCategory: notification.serviceCategory,
         pickup: notification.pickup,
         dropoff: notification.dropoff,
-        vehicle: notification.vehicle,
+        
+        // ✅ FIXED: Map vehicle correctly from Notification to Job
+        vehicle: {
+          type: notification.vehicle?.type?.type || '',  // Notice the nested access
+          makeModel: notification.vehicle?.makeModel || '',
+          year: notification.vehicle?.year || '',
+          color: notification.vehicle?.color || '',
+          licensePlate: notification.vehicle?.licensePlate || ''
+        },
+        
         customer: {
           name: notification.customer.name,
           phone: notification.customer.phone,

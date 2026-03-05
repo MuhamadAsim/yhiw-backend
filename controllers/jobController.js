@@ -8,7 +8,6 @@ import User from '../models/userModel.js';
 
 
 
-
 export const createJobNotification = async (req, res) => {
   try {
     // Get the nested data structure from frontend
@@ -61,13 +60,15 @@ export const createJobNotification = async (req, res) => {
       },
       dropoff: dropoff || null,
       
-      // Vehicle data
-      vehicle: vehicle || {
-        type: '',
-        makeModel: '',
-        year: '',
-        color: '',
-        licensePlate: ''
+      // ✅ FIXED: Vehicle data matching the schema structure
+      vehicle: {
+        type: {
+          type: vehicle?.type || ''  // Notice the nested structure
+        },
+        makeModel: vehicle?.makeModel || '',
+        year: vehicle?.year || '',
+        color: vehicle?.color || '',
+        licensePlate: vehicle?.licensePlate || ''
       },
       
       // Customer contact (minimal - name and phone only as per schema)
@@ -119,7 +120,6 @@ export const createJobNotification = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
 
 
 export const checkJobStatus = async (req, res) => {

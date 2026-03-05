@@ -20,7 +20,7 @@ const notificationSchema = new mongoose.Schema({
   servicePrice: Number,
   serviceCategory: String,
   
-  // Location data (essential for provider)
+  // Location data
   pickup: {
     address: String,
     coordinates: {
@@ -36,22 +36,24 @@ const notificationSchema = new mongoose.Schema({
     }
   },
   
-  // Vehicle data
+  // ✅ FIXED: Vehicle as nested object with proper type definition
   vehicle: {
-    type: String,
+    type: {            // This is the field name, not schema type
+      type: String,    // This tells Mongoose that 'type' field is a String
+    },
     makeModel: String,
     year: String,
     color: String,
     licensePlate: String
   },
   
-  // Customer contact (minimal)
+  // Customer contact
   customer: {
     name: String,
     phone: String
   },
   
-  // Urgency (immediate service)
+  // Urgency
   urgency: String,
   
   // Issues/description
@@ -92,11 +94,11 @@ const notificationSchema = new mongoose.Schema({
     viewedAt: { type: Date, default: Date.now }
   }],
   
-  createdAt: { type: Date, default: Date.now, expires: 120 } // Auto-delete after 120s
+  createdAt: { type: Date, default: Date.now, expires: 120 }
 
 }, { timestamps: true });
 
-// Indexes for provider queries
+// Indexes
 notificationSchema.index({ 'pickup.coordinates': '2dsphere' });
 notificationSchema.index({ serviceName: 1, createdAt: -1 });
 notificationSchema.index({ status: 1 });
