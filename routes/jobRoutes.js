@@ -4,18 +4,31 @@ import { authMiddleware } from '../middleware/auth.js';
 import {
   createJobNotification,
   checkJobStatus,
-  cancelJob
+  cancelJob,
+  getJobDetails,
+  rateCompletedJob,
+  completeService
 } from '../controllers/jobController.js';
-
-
 
 const router = express.Router();
 
+// ==================== JOB ROUTES ====================
 
-// Customer routes
+// Customer creates a new job (goes to Notification model)
 router.post('/create-notification', authMiddleware, createJobNotification);
-router.get('/status/:bookingId', authMiddleware, checkJobStatus);
-router.delete('/cancel/:bookingId', authMiddleware, cancelJob);
+
+// Customer checks if job was accepted (polls this)
+router.get('/:bookingId/status', authMiddleware, checkJobStatus);
+
+// Customer cancels a pending job
+router.delete('/:bookingId/cancel', authMiddleware, cancelJob);
+
+// Provider views full job details before accepting
+router.get('/:bookingId/details', authMiddleware, getJobDetails);
+
+router.post('/:bookingId/rate', rateCompletedJob);
+
+router.post('/:bookingId/complete', completeService);
 
 
 

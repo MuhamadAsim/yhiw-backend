@@ -2,35 +2,50 @@
 import User from '../models/userModel.js';
 import Job from '../models/jobModel.js';
 import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
-import Notification from '../models/notificationModel.js'; // Adjust path as needed
+import Notification from '../models/notificationModel.js';
 import mongoose from 'mongoose';
 
+// Google Maps API helper
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
+const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${GOOGLE_MAPS_API_KEY}`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
+      return {
+        distance: data.rows[0].elements[0].distance.text,
+        distanceValue: data.rows[0].elements[0].distance.value,
+        duration: data.rows[0].elements[0].duration.text,
+        durationValue: data.rows[0].elements[0].duration.value
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('Google Maps API error:', error);
+    return null;
+  }
+};
 
-
-
-
-
-
-export const getAvailableJobs= async (req, res) => {
+export const getAvailableJobs = async (req, res) => {
   try {
     const providerId = req.user.id;
 
     console.log('🧪 TEST MODE: Sending all available jobs without filters');
 
-    // Simple query - only pending jobs from last 2 minutes
     const query = {
       status: 'pending',
-      createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) } // Last 2 minutes only
+      createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) }
     };
 
-    // Get ALL pending jobs (no radius, no service type filter)
     const jobs = await Notification.find(query)
       .select('-viewedBy')
       .sort({ createdAt: -1 })
-      .limit(50); // Increased limit for testing
+      .limit(50);
 
-    // Mark as viewed by this provider
     if (jobs.length > 0) {
       const jobIds = jobs.map(job => job._id);
       await Notification.updateMany(
@@ -39,7 +54,7 @@ export const getAvailableJobs= async (req, res) => {
       );
     }
 
-    console.log(`🧪 TEST: Found ${jobs.length} jobs for provider ${providerId} (NO FILTERS APPLIED)`);
+    console.log(`🧪 TEST: Found ${jobs.length} jobs for provider ${providerId}`);
 
     res.json({
       success: true,
@@ -55,12 +70,6 @@ export const getAvailableJobs= async (req, res) => {
   }
 };
 
-
-
-
-
-
-
 export const acceptJob = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -69,7 +78,6 @@ export const acceptJob = async (req, res) => {
     const { bookingId } = req.params;
     const providerId = req.user.id;
 
-    // 1. Find the notification
     const notification = await Notification.findOne({
       bookingId,
       status: 'pending'
@@ -84,7 +92,6 @@ export const acceptJob = async (req, res) => {
       });
     }
 
-    // 2. Get provider details
     const provider = await User.findById(providerId).session(session);
     if (!provider) {
       await session.abortTransaction();
@@ -92,7 +99,6 @@ export const acceptJob = async (req, res) => {
       return res.status(404).json({ error: 'Provider not found' });
     }
 
-    // 3. Create permanent job record
     const job = new Job({
       bookingId: notification.bookingId,
       customerId: notification.customerId,
@@ -127,7 +133,6 @@ export const acceptJob = async (req, res) => {
 
     await job.save({ session });
 
-    // 4. Update provider live status
     await ProviderLiveStatus.findOneAndUpdate(
       { providerId: providerId },
       {
@@ -138,17 +143,32 @@ export const acceptJob = async (req, res) => {
       { session, upsert: true }
     );
 
-    // 5. Delete the notification
     await Notification.deleteOne({ _id: notification._id }).session(session);
 
     await session.commitTransaction();
     session.endSession();
 
-    // 6. Get customer details
     const customer = await User.findById(notification.customerId);
-
-    // 7. Calculate estimated arrival (example - you can implement actual logic)
-    const estimatedArrival = '5-10 minutes';
+    
+    // Get provider location for ETA calculation
+    const providerLocation = await ProviderLiveStatus.findOne({ providerId });
+    let estimatedArrival = '5-10 minutes';
+    
+    if (providerLocation?.currentLocation?.coordinates && notification.pickup?.coordinates) {
+      const providerLat = providerLocation.currentLocation.coordinates[1];
+      const providerLng = providerLocation.currentLocation.coordinates[0];
+      const pickupLat = notification.pickup.coordinates.lat;
+      const pickupLng = notification.pickup.coordinates.lng;
+      
+      const mapsData = await getGoogleMapsDistance(
+        providerLat, providerLng,
+        pickupLat, pickupLng
+      );
+      
+      if (mapsData) {
+        estimatedArrival = mapsData.duration;
+      }
+    }
 
     res.json({
       success: true,
@@ -172,11 +192,6 @@ export const acceptJob = async (req, res) => {
   }
 };
 
-
-
-
-
-
 export const updateProviderStatus = async (req, res) => {
   try {
     const { firebaseUserId } = req.params;
@@ -186,7 +201,7 @@ export const updateProviderStatus = async (req, res) => {
     const liveStatus = await ProviderLiveStatus.findOneAndUpdate(
       { providerId },
       {
-        firebaseUserId, // ← ADD THIS
+        firebaseUserId,
         isOnline,
         lastSeen: new Date(),
         ...(isOnline ? {} : { currentBookingId: null })
@@ -207,22 +222,16 @@ export const updateProviderStatus = async (req, res) => {
   }
 };
 
-
-
-
-
-
 export const updateProviderLocation = async (req, res) => {
   try {
     const { firebaseUserId } = req.params;
     const { latitude, longitude, address, isManual, timestamp } = req.body;
     const providerId = req.user.id;
 
-    // Update provider live status with location
     const liveStatus = await ProviderLiveStatus.findOneAndUpdate(
       { providerId },
       {
-        firebaseUserId, // ← ADD THIS - it's required in schema
+        firebaseUserId,
         currentLocation: {
           type: 'Point',
           coordinates: [longitude, latitude],
@@ -245,8 +254,6 @@ export const updateProviderLocation = async (req, res) => {
   }
 };
 
-
-
 export const getProviderStatus = async (req, res) => {
   try {
     const { firebaseUserId } = req.params;
@@ -261,7 +268,7 @@ export const getProviderStatus = async (req, res) => {
           isOnline: false,
           isAvailable: true,
           currentLocation: null,
-          firebaseUserId // ← Include this
+          firebaseUserId
         }
       });
     }
@@ -283,18 +290,11 @@ export const getProviderStatus = async (req, res) => {
   }
 };
 
-
-
-
-
-
-// controllers/providerController.js
 export const getProviderPerformance = async (req, res) => {
   try {
     const { firebaseUserId } = req.params;
     const providerId = req.user.id;
 
-    // Get today's jobs
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -303,7 +303,6 @@ export const getProviderPerformance = async (req, res) => {
       acceptedAt: { $gte: today }
     });
 
-    // Calculate totals
     const earnings = todayJobs.reduce((sum, job) => 
       sum + (job.bookingData?.payment?.totalAmount || 0), 0
     );
@@ -316,7 +315,6 @@ export const getProviderPerformance = async (req, res) => {
       return sum;
     }, 0);
 
-    // Get provider rating from User model
     const provider = await User.findById(providerId);
 
     res.json({
@@ -330,7 +328,6 @@ export const getProviderPerformance = async (req, res) => {
     });
   } catch (error) {
     console.error('Get performance error:', error);
-    // Return default values on error
     res.json({
       success: true,
       data: {
@@ -343,12 +340,6 @@ export const getProviderPerformance = async (req, res) => {
   }
 };
 
-
-
-
-
-
-// controllers/providerController.js
 export const getRecentJobs = async (req, res) => {
   try {
     const { firebaseUserId } = req.params;
@@ -358,6 +349,16 @@ export const getRecentJobs = async (req, res) => {
       .sort({ acceptedAt: -1 })
       .limit(5)
       .select('bookingData status acceptedAt completedAt');
+
+    const formatRelativeTime = (date) => {
+      const now = new Date();
+      const diffMs = now - new Date(date);
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      
+      if (diffMins < 60) return `${diffMins} min ago`;
+      if (diffMins < 1440) return `${Math.floor(diffMins / 60)} hours ago`;
+      return `${Math.floor(diffMins / 1440)} days ago`;
+    };
 
     const formattedJobs = recentJobs.map(job => ({
       id: job._id,
@@ -375,20 +376,308 @@ export const getRecentJobs = async (req, res) => {
     console.error('Get recent jobs error:', error);
     res.json({
       success: true,
-      data: [] // Return empty array on error
+      data: []
     });
   }
 };
 
+export const providerCancelJob = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.id;
+    const { reason } = req.body;
 
+    const job = await Job.findOne({ bookingId, providerId });
 
-// Helper function - define this BEFORE getRecentJobs
-const formatRelativeTime = (date) => {
-  const now = new Date();
-  const diffMs = now - new Date(date);
-  const diffMins = Math.floor(diffMs / (1000 * 60));
-  
-  if (diffMins < 60) return `${diffMins} min ago`;
-  if (diffMins < 1440) return `${Math.floor(diffMins / 60)} hours ago`;
-  return `${Math.floor(diffMins / 1440)} days ago`;
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    if (job.status === 'completed') {
+      return res.status(400).json({ error: 'Cannot cancel completed job' });
+    }
+
+    job.status = 'cancelled';
+    job.cancelledAt = new Date();
+    job.cancelledBy = 'provider';
+    await job.save();
+
+    await ProviderLiveStatus.findOneAndUpdate(
+      { providerId },
+      {
+        isAvailable: true,
+        currentBookingId: null
+      }
+    );
+
+    res.json({ success: true, message: 'Job cancelled successfully' });
+  } catch (error) {
+    console.error('Provider cancel error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ==================== SERVICE IN PROGRESS CONTROLLERS ====================
+
+export const getActiveJob = async (req, res) => {
+  try {
+    const providerId = req.user.id;
+    const { bookingId } = req.params;
+
+    const job = await Job.findOne({ 
+      bookingId, 
+      providerId,
+      status: { $in: ['accepted', 'in_progress'] }
+    }).populate('customerId', 'fullName phoneNumber');
+
+    if (!job) {
+      return res.status(404).json({ 
+        error: 'Active job not found' 
+      });
+    }
+
+    // Get real ETA if still en route
+    let remainingEta = null;
+    if (job.status === 'accepted') {
+      const providerLocation = await ProviderLiveStatus.findOne({ providerId });
+      
+      if (providerLocation?.currentLocation?.coordinates && job.bookingData?.pickup?.coordinates) {
+        const providerLat = providerLocation.currentLocation.coordinates[1];
+        const providerLng = providerLocation.currentLocation.coordinates[0];
+        const pickupLat = job.bookingData.pickup.coordinates.lat;
+        const pickupLng = job.bookingData.pickup.coordinates.lng;
+        
+        const mapsData = await getGoogleMapsDistance(
+          providerLat, providerLng,
+          pickupLat, pickupLng
+        );
+        
+        if (mapsData) {
+          remainingEta = mapsData.duration;
+        }
+      }
+    }
+
+    const jobDetails = {
+      bookingId: job.bookingId,
+      serviceType: job.bookingData?.serviceName || 'Towing Service',
+      vehicleType: job.bookingData?.vehicle?.type || 'Sedan',
+      licensePlate: job.bookingData?.vehicle?.licensePlate || 'ABC 1234',
+      vehicleModel: `${job.bookingData?.vehicle?.makeModel || 'Toyota Camry'} ${job.bookingData?.vehicle?.year || '2020'}`,
+      customer: {
+        name: job.customerId?.fullName || job.bookingData?.customer?.name || 'Mohammed A.',
+        phone: job.customerId?.phoneNumber || job.bookingData?.customer?.phone || '+973 3XXX XXXX',
+      },
+      estimatedEarnings: job.bookingData?.payment?.totalAmount || 81,
+      status: job.status,
+      startedAt: job.startedAt,
+      remainingEta: remainingEta,
+      timeTracking: job.timeTracking || { totalSeconds: 0, isPaused: false },
+      photos: job.photos || [],
+      issues: job.issues || [],
+      checklist: [
+        'Inspect vehicle condition',
+        'Secure vehicle on flatbed',
+        'Document pre-service photos',
+        'Check for personal items',
+        'Verify drop-off location',
+      ]
+    };
+
+    res.json({ 
+      success: true, 
+      job: jobDetails 
+    });
+
+  } catch (error) {
+    console.error('Get active job error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const updateJobStatus = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { status, action, timeData } = req.body;
+    const providerId = req.user.id;
+
+    const updateData = {};
+    
+    if (status === 'in_progress' && action === 'start') {
+      updateData.startedAt = new Date();
+      updateData.status = 'in_progress';
+      updateData['timeTracking'] = { totalSeconds: 0, isPaused: false };
+    } else if (status === 'completed') {
+      updateData.completedAt = new Date();
+      updateData.status = 'completed';
+      
+      await ProviderLiveStatus.findOneAndUpdate(
+        { providerId },
+        { isAvailable: true, currentBookingId: null }
+      );
+    } else if (action === 'pause') {
+      updateData['timeTracking.isPaused'] = true;
+      updateData['timeTracking.pausedAt'] = new Date();
+    } else if (action === 'resume') {
+      updateData['timeTracking.isPaused'] = false;
+    } else if (action === 'add_time' && timeData) {
+      updateData.$push = { 
+        'timeTracking.timeExtensions': {
+          minutes: timeData.minutes,
+          reason: timeData.reason,
+          requestedAt: new Date()
+        }
+      };
+    }
+
+    const job = await Job.findOneAndUpdate(
+      { bookingId, providerId },
+      updateData,
+      { new: true }
+    );
+
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Job updated successfully`,
+      status: job.status,
+      timeTracking: job.timeTracking
+    });
+
+  } catch (error) {
+    console.error('Update job status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const uploadServicePhoto = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.id;
+    const { photoType, description } = req.body;
+
+    const job = await Job.findOne({ bookingId, providerId });
+    
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    if (!job.photos) job.photos = [];
+    
+    job.photos.push({
+      type: photoType || 'during-service',
+      url: req.file?.path || 'temp-photo-url',
+      description,
+      uploadedAt: new Date()
+    });
+
+    await job.save();
+
+    res.json({ 
+      success: true, 
+      message: 'Photo uploaded successfully',
+      photos: job.photos
+    });
+
+  } catch (error) {
+    console.error('Upload photo error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const reportServiceIssue = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.id;
+    const { issueType, description, severity } = req.body;
+
+    const job = await Job.findOne({ bookingId, providerId });
+    
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    if (!job.issues) job.issues = [];
+    
+    const newIssue = {
+      type: issueType,
+      description,
+      severity: severity || 'medium',
+      reportedBy: 'provider',
+      reportedAt: new Date(),
+      status: 'open'
+    };
+
+    job.issues.push(newIssue);
+    await job.save();
+
+    res.json({ 
+      success: true, 
+      message: 'Issue reported successfully',
+      issue: newIssue
+    });
+
+  } catch (error) {
+    console.error('Report issue error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const completeService = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.id;
+    const { 
+      completionNotes, 
+      checklistCompleted,
+      issuesFound 
+    } = req.body;
+
+    const job = await Job.findOne({ bookingId, providerId });
+    
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    job.status = 'completed';
+    job.completedAt = new Date();
+    job.completionDetails = {
+      notes: completionNotes,
+      checklistCompleted: checklistCompleted || [],
+      issuesFound: issuesFound || [],
+      completedBy: providerId
+    };
+
+    await job.save();
+
+    const providerStatus = await ProviderLiveStatus.findOneAndUpdate(
+      { providerId },
+      { 
+        isAvailable: true, 
+        currentBookingId: null
+      },
+      { new: true }
+    );
+
+    const totalJobsCompleted = (providerStatus?.totalJobsCompleted || 0) + 1;
+    
+    await ProviderLiveStatus.findOneAndUpdate(
+      { providerId },
+      { totalJobsCompleted }
+    );
+
+    res.json({ 
+      success: true, 
+      message: 'Service completed successfully',
+      earnings: job.bookingData?.payment?.totalAmount,
+      totalJobsCompleted
+    });
+
+  } catch (error) {
+    console.error('Complete service error:', error);
+    res.status(500).json({ error: error.message });
+  }
 };

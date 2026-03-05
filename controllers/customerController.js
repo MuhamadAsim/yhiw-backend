@@ -1,315 +1,5 @@
 import User from '../models/userModel.js';
 
-// Store active bookings (in production, use database)
-const activeBookings = new Map();
-
-// Create new booking
-export const createBooking = async (req, res) => {
-  try {
-    const bookingData = req.body;
-
-    console.log('Received booking data:', JSON.stringify(bookingData, null, 2));
-
-    // Validate required fields
-    if (!bookingData.pickup?.address || !bookingData.customer?.name || !bookingData.customer?.phone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: pickup address, customer name, or phone'
-      });
-    }
-
-    // Validate service-specific required fields
-    if (bookingData.isCarRental) {
-      if (!bookingData.carRental?.licenseFront || !bookingData.carRental?.licenseBack) {
-        return res.status(400).json({
-          success: false,
-          message: 'Car rental requires license images (front and back)'
-        });
-      }
-    }
-
-    if (bookingData.isFuelDelivery) {
-      if (!bookingData.fuelDelivery?.fuelType) {
-        return res.status(400).json({
-          success: false,
-          message: 'Fuel delivery requires fuel type selection'
-        });
-      }
-    }
-
-    if (bookingData.isSpareParts) {
-      if (!bookingData.spareParts?.partDescription) {
-        return res.status(400).json({
-          success: false,
-          message: 'Spare parts requires part description'
-        });
-      }
-    }
-
-    // Validate schedule for car rental
-    if (bookingData.isCarRental && bookingData.schedule?.type === 'schedule_later') {
-      if (!bookingData.schedule?.scheduledDateTime?.date || !bookingData.schedule?.scheduledDateTime?.timeSlot) {
-        return res.status(400).json({
-          success: false,
-          message: 'Car rental requires scheduled date and time'
-        });
-      }
-    }
-
-    // Generate booking ID
-    const bookingId = generateBookingId();
-
-    // If no coordinates provided for location-based services, return error
-    if (!bookingData.locationSkipped && !bookingData.pickup.coordinates) {
-      return res.status(400).json({
-        success: false,
-        message: 'Pickup coordinates are required for this service'
-      });
-    }
-
-    // Find nearby providers (skip for car rental as it's scheduled)
-    let nearbyProviders = [];
-    if (!bookingData.isCarRental && !bookingData.locationSkipped) {
-      nearbyProviders = findNearbyProviders(
-        bookingData.pickup.coordinates?.lat,
-        bookingData.pickup.coordinates?.lng,
-        bookingData.serviceName,
-        bookingData.vehicle?.type,
-        bookingData, // Pass whole booking for service-specific matching
-        3 // Start with 3km radius
-      );
-    } else if (bookingData.isCarRental) {
-      // For car rental, find providers that offer rentals regardless of distance
-      nearbyProviders = findRentalProviders(bookingData);
-    }
-
-    // Store booking with all data
-    const booking = {
-      id: bookingId,
-      ...bookingData,
-      status: nearbyProviders.length > 0 ? 'searching' : 'no_providers',
-      createdAt: new Date().toISOString(),
-      nearbyProviders: nearbyProviders.map(p => p.id), // Store just IDs
-      searchRadius: getCurrentSearchRadius(0), // Start with 3km
-      searchAttempts: 0,
-      providerSearchStatus: nearbyProviders.length > 0 ? 'searching' : 'failed'
-    };
-
-    activeBookings.set(bookingId, booking);
-
-    // If no providers found at all, return no providers
-    if (nearbyProviders.length === 0) {
-      return res.status(200).json({
-        success: true,
-        bookingId,
-        status: 'no_providers',
-        message: bookingData.isCarRental 
-          ? 'No rental providers available at this time'
-          : 'No providers available in your area'
-      });
-    }
-
-    // Start async provider assignment process (unless it's car rental with future date)
-    if (bookingData.isCarRental && bookingData.schedule?.type === 'schedule_later') {
-      // For scheduled rentals, just confirm booking without searching now
-      booking.status = 'scheduled';
-      activeBookings.set(bookingId, booking);
-      
-      return res.status(201).json({
-        success: true,
-        bookingId,
-        status: 'scheduled',
-        message: 'Rental booking created successfully'
-      });
-    } else {
-      // Start provider search for immediate services
-      assignProviderToBooking(bookingId);
-    }
-
-    return res.status(201).json({
-      success: true,
-      bookingId,
-      status: 'pending',
-      message: 'Booking created successfully, searching for providers...'
-    });
-
-  } catch (error) {
-    console.error('Error creating booking:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-};
-
-// Cancel booking
-export const cancelBooking = async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { reason } = req.body;
-
-    const booking = activeBookings.get(bookingId);
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    // Check if cancellation is allowed based on time
-    const now = new Date();
-    const bookingTime = new Date(booking.createdAt);
-    const hoursDiff = (now - bookingTime) / (1000 * 60 * 60);
-
-    // Different cancellation policies for car rental
-    if (booking.isCarRental && booking.schedule?.scheduledDateTime?.date) {
-      const scheduledDate = new Date(booking.schedule.scheduledDateTime.date);
-      const daysDiff = (scheduledDate - now) / (1000 * 60 * 60 * 24);
-      
-      if (daysDiff < 1) {
-        return res.status(200).json({
-          success: true,
-          message: 'Booking cancelled with 50% fee (cancellation within 24 hours)',
-          fee: booking.payment?.totalAmount * 0.5
-        });
-      }
-    } else {
-      // Standard service cancellation policy
-      if (hoursDiff < 2) {
-        // Free cancellation within 2 hours
-        booking.status = 'cancelled';
-        booking.cancelledAt = now.toISOString();
-        booking.cancellationReason = reason || 'User cancelled';
-        
-        activeBookings.set(bookingId, booking);
-        
-        return res.status(200).json({
-          success: true,
-          message: 'Booking cancelled successfully - free cancellation',
-          fee: 0
-        });
-      } else {
-        // Late cancellation fee
-        booking.status = 'cancelled';
-        booking.cancelledAt = now.toISOString();
-        booking.cancellationReason = reason || 'User cancelled late';
-        
-        activeBookings.set(bookingId, booking);
-        
-        return res.status(200).json({
-          success: true,
-          message: 'Booking cancelled with 50% fee (late cancellation)',
-          fee: booking.payment?.totalAmount * 0.5
-        });
-      }
-    }
-
-    booking.status = 'cancelled';
-    booking.cancelledAt = now.toISOString();
-    booking.cancellationReason = reason || 'User cancelled';
-    
-    activeBookings.set(bookingId, booking);
-
-    return res.status(200).json({
-      success: true,
-      message: 'Booking cancelled successfully'
-    });
-
-  } catch (error) {
-    console.error('Error cancelling booking:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-};
-
-// Helper function to generate booking ID
-const generateBookingId = () => {
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 8);
-  return `BOK-${timestamp}-${random}`.toUpperCase();
-};
-
-
-
-// Get current search radius based on attempts
-const getCurrentSearchRadius = (attempts = 0) => {
-  if (attempts < 3) return 3;
-  if (attempts < 6) return 5;
-  if (attempts < 9) return 7;
-  return 10;
-};
-
-
-
-
-// Get all active bookings (for admin/debugging)
-export const getAllBookings = async (req, res) => {
-  try {
-    const bookings = Array.from(activeBookings.values());
-    return res.status(200).json({
-      success: true,
-      count: bookings.length,
-      bookings
-    });
-  } catch (error) {
-    console.error('Error getting bookings:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-};
-
-// Get booking details
-export const getBookingDetails = async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-
-    const booking = activeBookings.get(bookingId);
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      booking
-    });
-
-  } catch (error) {
-    console.error('Error getting booking details:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -646,5 +336,336 @@ export const toggleFavoriteLocation = async (req, res) => {
       message: 'Failed to toggle favorite',
       error: error.message
     });
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+// Add to controllers/jobController.js - AFTER your existing code
+export const getCustomerJobDetails = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const customerId = req.user.id;
+
+    console.log(`📋 Customer fetching job details: ${bookingId}`);
+
+    // Find the job (must belong to this customer)
+    const job = await Job.findOne({ 
+      bookingId,
+      customerId 
+    }).populate('providerId', 'fullName phoneNumber profileImage rating completedJobs yearsOfExperience');
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Get provider's live location
+    const providerLocation = await ProviderLiveStatus.findOne({
+      providerId: job.providerId
+    });
+
+    // Calculate ETA and distance using Google Maps if provider location exists
+    let estimatedArrival = '15 min';
+    let distance = '2.5 km';
+    
+    if (providerLocation?.currentLocation?.coordinates && 
+        job.bookingData?.pickup?.coordinates) {
+      
+      const providerLat = providerLocation.currentLocation.coordinates[1];
+      const providerLng = providerLocation.currentLocation.coordinates[0];
+      const pickupLat = job.bookingData.pickup.coordinates.lat;
+      const pickupLng = job.bookingData.pickup.coordinates.lng;
+      
+      try {
+        const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
+        
+        // Call Google Maps Distance Matrix API
+        const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLat},${providerLng}&destinations=${pickupLat},${pickupLng}&key=${googleMapsApiKey}`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
+          // Get duration text (e.g., "15 mins")
+          estimatedArrival = data.rows[0].elements[0].duration.text;
+          
+          // Get distance text (e.g., "2.5 km")
+          distance = data.rows[0].elements[0].distance.text;
+          
+          console.log(`📍 Google Maps: ETA ${estimatedArrival}, Distance ${distance}`);
+        }
+      } catch (mapsError) {
+        console.error('Google Maps API error:', mapsError);
+        // Fallback to simple calculation if Google Maps fails
+        const simpleDistance = calculateSimpleDistance(
+          providerLat, providerLng, 
+          pickupLat, pickupLng
+        );
+        distance = `${simpleDistance.toFixed(1)} km`;
+        estimatedArrival = `${Math.ceil(simpleDistance * 12)} min`; // Assume 5 min per km
+      }
+    }
+
+    // Map database status to frontend expected status
+    const mapJobStatus = (dbStatus) => {
+      const statusMap = {
+        'accepted': 'accepted',
+        'in_progress': 'started',
+        'completed': 'completed',
+        'cancelled': 'cancelled'
+      };
+      return statusMap[dbStatus] || dbStatus;
+    };
+
+    // Format response for customer view
+    const jobDetails = {
+      bookingId: job.bookingId,
+      status: mapJobStatus(job.status),
+      serviceType: job.bookingData?.serviceCategory || '',
+      serviceName: job.bookingData?.serviceName || '',
+      vehicleType: job.bookingData?.vehicle?.type || '',
+      
+      pickup: {
+        address: job.bookingData?.pickup?.address || '',
+        coordinates: job.bookingData?.pickup?.coordinates || { lat: 0, lng: 0 }
+      },
+      
+      dropoff: job.bookingData?.dropoff ? {
+        address: job.bookingData.dropoff.address,
+        coordinates: job.bookingData.dropoff.coordinates
+      } : undefined,
+      
+      provider: job.providerId ? {
+        id: job.providerId._id,
+        name: job.providerId.fullName || 'Provider',
+        phone: job.providerId.phoneNumber || '',
+        rating: job.providerId.rating || 4.5,
+        profileImage: job.providerId.profileImage,
+        yearsOfExperience: job.providerId.yearsOfExperience || 3,
+        completedJobs: job.providerId.completedJobs || 127,
+        vehicle: {
+          type: job.bookingData?.vehicle?.type || 'Service Vehicle',
+          makeModel: job.bookingData?.vehicle?.makeModel || 'Professional Vehicle',
+          licensePlate: job.bookingData?.vehicle?.licensePlate || 'BHR 1234',
+          color: job.bookingData?.vehicle?.color || 'White',
+          description: `${job.bookingData?.vehicle?.color || 'White'} ${job.bookingData?.vehicle?.makeModel || 'Service Vehicle'}`
+        }
+      } : null,
+      
+      providerLocation: providerLocation?.currentLocation ? {
+        latitude: providerLocation.currentLocation.coordinates[1],
+        longitude: providerLocation.currentLocation.coordinates[0],
+        heading: providerLocation.heading || 0,
+        updatedAt: providerLocation.currentLocation.lastUpdated
+      } : null,
+      
+      payment: {
+        totalAmount: job.bookingData?.payment?.totalAmount || 0,
+        baseFee: job.bookingData?.payment?.baseServiceFee || 0,
+        tip: job.bookingData?.payment?.selectedTip || 0
+      },
+      
+      estimatedArrival: estimatedArrival,
+      distance: distance,
+      createdAt: job.acceptedAt || job.createdAt
+    };
+
+    res.json({
+      success: true,
+      job: jobDetails
+    });
+
+  } catch (error) {
+    console.error('Get customer job details error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Helper function for simple distance calculation (fallback)
+function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+
+
+
+
+
+
+export const getProviderLocationForCustomer = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const customerId = req.user.id;
+
+    // Find the job to verify it belongs to this customer
+    const job = await Job.findOne({ bookingId, customerId });
+    
+    if (!job || !job.providerId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job or provider not found'
+      });
+    }
+
+    // Get provider's live location
+    const providerLocation = await ProviderLiveStatus.findOne({
+      providerId: job.providerId
+    });
+
+    if (!providerLocation?.currentLocation?.coordinates) {
+      return res.json({
+        success: true,
+        location: null
+      });
+    }
+
+    // Also calculate updated ETA if pickup coordinates exist
+    let eta = null;
+    if (job.bookingData?.pickup?.coordinates) {
+      try {
+        const providerLat = providerLocation.currentLocation.coordinates[1];
+        const providerLng = providerLocation.currentLocation.coordinates[0];
+        const pickupLat = job.bookingData.pickup.coordinates.lat;
+        const pickupLng = job.bookingData.pickup.coordinates.lng;
+        
+        const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
+        const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLat},${providerLng}&destinations=${pickupLat},${pickupLng}&key=${googleMapsApiKey}`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
+          eta = {
+            text: data.rows[0].elements[0].duration.text,
+            value: data.rows[0].elements[0].duration.value, // in seconds
+            distance: data.rows[0].elements[0].distance.text
+          };
+        }
+      } catch (mapsError) {
+        console.error('Google Maps ETA error:', mapsError);
+      }
+    }
+
+    res.json({
+      success: true,
+      location: {
+        latitude: providerLocation.currentLocation.coordinates[1],
+        longitude: providerLocation.currentLocation.coordinates[0],
+        heading: providerLocation.heading || 0,
+        updatedAt: providerLocation.currentLocation.lastUpdated,
+        eta: eta 
+      }
+    });
+
+  } catch (error) {
+    console.error('Get provider location error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+
+
+
+/**
+ * Get job status for customer polling
+ */
+export const getJobStatusForCustomer = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const customerId = req.user.id;
+
+    const job = await Job.findOne({ bookingId, customerId });
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      status: job.status,
+      updatedAt: job.updatedAt
+    });
+
+  } catch (error) {
+    console.error('Get job status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * Cancel job from customer side
+ */
+export const customerCancelJob = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const customerId = req.user.id;
+    const { reason } = req.body;
+
+    const job = await Job.findOne({ bookingId, customerId });
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Only allow cancellation if not completed
+    if (job.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot cancel completed job'
+      });
+    }
+
+    // Update job
+    job.status = 'cancelled';
+    job.cancelledAt = new Date();
+    job.cancelledBy = 'customer';
+    await job.save();
+
+    // Make provider available again
+    if (job.providerId) {
+      await ProviderLiveStatus.findOneAndUpdate(
+        { providerId: job.providerId },
+        {
+          isAvailable: true,
+          currentBookingId: null
+        }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'Job cancelled successfully'
+    });
+
+  } catch (error) {
+    console.error('Customer cancel job error:', error);
+    res.status(500).json({ error: error.message });
   }
 };

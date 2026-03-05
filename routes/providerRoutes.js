@@ -2,25 +2,34 @@
 import express from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import {
+  // Existing imports
   getAvailableJobs,
   acceptJob,
   updateProviderStatus,
   updateProviderLocation,
   getProviderStatus,
   getProviderPerformance,
-  getRecentJobs
+  getRecentJobs,
+  providerCancelJob,
+  
+  // NEW: Service In Progress controllers
+  getActiveJob,
+  updateJobStatus,
+  uploadServicePhoto,
+  reportServiceIssue,
+  completeService
 } from '../controllers/providerController.js';
 
-
 const router = express.Router();
-
 
 // All provider routes require authentication
 router.use(authMiddleware);
 
-// Job endpoints
+// ==================== EXISTING ROUTES ====================
+
+// Job discovery & acceptance
 router.get('/available-jobs', getAvailableJobs);
-router.post('/accept-job/:bookingId', acceptJob);
+router.post('/:bookingId/accept-job', acceptJob);
 
 // Provider status & location
 router.put('/:firebaseUserId/status', updateProviderStatus);
@@ -30,7 +39,23 @@ router.post('/:firebaseUserId/location', updateProviderLocation);
 // Performance & history
 router.get('/:firebaseUserId/performance', getProviderPerformance);
 router.get('/:firebaseUserId/recent-jobs', getRecentJobs);
+router.delete('/cancel/:bookingId', providerCancelJob);
 
+// ==================== NEW SERVICE IN PROGRESS ROUTES ====================
 
+// Active job details
+router.get('/:bookingId/active-job', getActiveJob);
+
+// Job status updates (start/pause/add time)
+router.patch('/job/:bookingId/status', updateJobStatus);
+
+// Photo upload (you'll need multer middleware for this)
+router.post('/job/:bookingId/photos', uploadServicePhoto);
+
+// Report issue
+router.post('/job/:bookingId/issues', reportServiceIssue);
+
+// Complete service
+router.post('/job/:bookingId/complete', completeService);
 
 export default router;

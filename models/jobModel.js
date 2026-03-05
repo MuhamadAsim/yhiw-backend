@@ -74,7 +74,7 @@ const jobSchema = new mongoose.Schema({
     hasInsurance: Boolean
   },
   
-  // Job status
+  // Job status - ONLY these 4 values
   status: {
     type: String,
     enum: ['accepted', 'in_progress', 'completed', 'cancelled'],
@@ -83,21 +83,64 @@ const jobSchema = new mongoose.Schema({
   
   // Timeline
   acceptedAt: { type: Date, default: Date.now },
-  startedAt: Date,
-  completedAt: Date,
+  startedAt: Date,        // When service started (status becomes 'in_progress')
+  completedAt: Date,      // When service completed
   cancelledAt: Date,
   cancelledBy: {
     type: String,
     enum: ['customer', 'provider', 'system']
   },
   
+  // NEW: Time tracking for service
+  timeTracking: {
+    totalSeconds: { type: Number, default: 0 },
+    pausedAt: Date,
+    isPaused: { type: Boolean, default: false },
+    timeExtensions: [{
+      minutes: Number,
+      reason: String,
+      requestedAt: Date,
+      approved: { type: Boolean, default: false }
+    }]
+  },
+  
+  // NEW: Photos documentation
+  photos: [{
+    type: { 
+      type: String, 
+      enum: ['pre-service', 'during-service', 'post-service', 'issue'],
+      default: 'during-service'
+    },
+    url: String,
+    description: String,
+    uploadedAt: { type: Date, default: Date.now }
+  }],
+  
+  // NEW: Issues reported during service
+  issues: [{
+    type: String,
+    description: String,
+    severity: { type: String, enum: ['low', 'medium', 'high'] },
+    reportedAt: Date,
+    status: { type: String, enum: ['open', 'resolved'], default: 'open' }
+  }],
+  
+  // NEW: Service completion details
+  completionDetails: {
+    notes: String,
+    checklistCompleted: [String],
+    issuesFound: [String],
+    completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  },
+  
   // Live tracking
   currentLocation: {
     type: { type: String, enum: ['Point'], default: 'Point' },
-    coordinates: { type: [Number], default: [0, 0] }
+    coordinates: { type: [Number], default: [0, 0] },
+    lastUpdated: Date
   },
   
-  // Ratings (after completion)
+  // Ratings
   customerRating: {
     rating: Number,
     review: String,
