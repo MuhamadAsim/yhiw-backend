@@ -6,6 +6,9 @@ import User from '../models/userModel.js';
 
 
 
+
+
+
 export const createJobNotification = async (req, res) => {
   try {
     // Get the nested data structure from frontend

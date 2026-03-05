@@ -18,14 +18,14 @@ const jobSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  
+
   // Snapshot of essential booking data
   bookingData: {
     serviceId: String,
     serviceName: String,
     servicePrice: Number,
     serviceCategory: String,
-    
+
     pickup: {
       address: String,
       coordinates: {
@@ -40,31 +40,32 @@ const jobSchema = new mongoose.Schema({
         lng: Number
       }
     },
-    
+
     vehicle: {
-      type: String,
-      makeModel: String,
+      type: {
+        type: String,     
+      }, makeModel: String,
       year: String,
       color: String,
       licensePlate: String
     },
-    
+
     customer: {
       name: String,
       phone: String,
       email: String
     },
-    
+
     urgency: String,
     issues: [String],
     description: String,
-    
+
     payment: {
       totalAmount: Number,
       selectedTip: Number,
       baseServiceFee: Number
     },
-    
+
     // Service-specific flags
     isCarRental: Boolean,
     isFuelDelivery: Boolean,
@@ -73,14 +74,14 @@ const jobSchema = new mongoose.Schema({
     partDescription: String,
     hasInsurance: Boolean
   },
-  
+
   // Job status - ONLY these 4 values
   status: {
     type: String,
     enum: ['accepted', 'in_progress', 'completed', 'cancelled'],
     default: 'accepted'
   },
-  
+
   // Timeline
   acceptedAt: { type: Date, default: Date.now },
   startedAt: Date,        // When service started (status becomes 'in_progress')
@@ -90,7 +91,7 @@ const jobSchema = new mongoose.Schema({
     type: String,
     enum: ['customer', 'provider', 'system']
   },
-  
+
   // NEW: Time tracking for service
   timeTracking: {
     totalSeconds: { type: Number, default: 0 },
@@ -103,11 +104,11 @@ const jobSchema = new mongoose.Schema({
       approved: { type: Boolean, default: false }
     }]
   },
-  
+
   // NEW: Photos documentation
   photos: [{
-    type: { 
-      type: String, 
+    type: {
+      type: String,
       enum: ['pre-service', 'during-service', 'post-service', 'issue'],
       default: 'during-service'
     },
@@ -115,7 +116,7 @@ const jobSchema = new mongoose.Schema({
     description: String,
     uploadedAt: { type: Date, default: Date.now }
   }],
-  
+
   // NEW: Issues reported during service
   issues: [{
     type: String,
@@ -124,7 +125,7 @@ const jobSchema = new mongoose.Schema({
     reportedAt: Date,
     status: { type: String, enum: ['open', 'resolved'], default: 'open' }
   }],
-  
+
   // NEW: Service completion details
   completionDetails: {
     notes: String,
@@ -132,14 +133,14 @@ const jobSchema = new mongoose.Schema({
     issuesFound: [String],
     completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   },
-  
+
   // Live tracking
   currentLocation: {
     type: { type: String, enum: ['Point'], default: 'Point' },
     coordinates: { type: [Number], default: [0, 0] },
     lastUpdated: Date
   },
-  
+
   // Ratings
   customerRating: {
     rating: Number,
