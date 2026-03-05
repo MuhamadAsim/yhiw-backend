@@ -5,12 +5,15 @@ import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
 import Notification from '../models/notificationModel.js';
 import mongoose from 'mongoose';
 
-// Google Maps API helper
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
+
+// Google Maps API helper (already in your code, but included for reference)
 const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => {
   try {
+    const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
     const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${GOOGLE_MAPS_API_KEY}`;
+    
+    console.log(`🌐 Calling Google Maps API: ${url}`);
     
     const response = await fetch(url);
     const data = await response.json();
@@ -23,9 +26,11 @@ const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => 
         durationValue: data.rows[0].elements[0].duration.value
       };
     }
+    
+    console.warn('⚠️ Google Maps API returned non-OK status:', data.status);
     return null;
   } catch (error) {
-    console.error('Google Maps API error:', error);
+    console.error('❌ Google Maps API error:', error);
     return null;
   }
 };
@@ -34,41 +39,142 @@ export const getAvailableJobs = async (req, res) => {
   try {
     const providerId = req.user.id;
 
-    console.log('🧪 TEST MODE: Sending all available jobs without filters');
+    console.log(`📍 Getting available jobs for provider: ${providerId}`);
+
+    // Get provider's current location for distance calculation
+    const providerLocation = await ProviderLiveStatus.findOne({ providerId });
+    
+    if (!providerLocation?.currentLocation?.coordinates) {
+      console.log('⚠️ Provider location not found, cannot calculate distances');
+      // Still return jobs but without distance
+      const query = {
+        status: 'pending',
+        createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) }
+      };
+
+      const jobs = await Notification.find(query)
+        .select('-viewedBy')
+        .sort({ createdAt: -1 })
+        .limit(50);
+
+      return res.json({
+        success: true,
+        count: jobs.length,
+        jobs: jobs.map(job => ({
+          ...job.toObject(),
+          distance: 'Location unavailable',
+          estimatedArrival: 'Unknown'
+        }))
+      });
+    }
+
+    const providerLat = providerLocation.currentLocation.coordinates[1];
+    const providerLng = providerLocation.currentLocation.coordinates[0];
 
     const query = {
       status: 'pending',
       createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) }
     };
 
-    const jobs = await Notification.find(query)
+    const notifications = await Notification.find(query)
       .select('-viewedBy')
       .sort({ createdAt: -1 })
       .limit(50);
 
-    if (jobs.length > 0) {
-      const jobIds = jobs.map(job => job._id);
+    console.log(`📦 Found ${notifications.length} pending jobs`);
+
+    // Enhance each job with distance and ETA using Google Maps
+    const jobsWithDistance = await Promise.all(notifications.map(async (notification) => {
+      const jobObj = notification.toObject();
+      
+      // Default values
+      jobObj.distance = 'Calculating...';
+      jobObj.estimatedArrival = 'Calculating...';
+      
+      // Calculate distance if we have pickup coordinates
+      if (notification.pickup?.coordinates) {
+        const pickupLat = notification.pickup.coordinates.lat;
+        const pickupLng = notification.pickup.coordinates.lng;
+        
+        try {
+          // Get real distance from Google Maps
+          const mapsData = await getGoogleMapsDistance(
+            providerLat, providerLng,
+            pickupLat, pickupLng
+          );
+          
+          if (mapsData) {
+            jobObj.distance = mapsData.distance; // e.g., "3.2 km"
+            jobObj.estimatedArrival = mapsData.duration; // e.g., "12 mins"
+            jobObj.distanceValue = mapsData.distanceValue; // in meters
+            jobObj.durationValue = mapsData.durationValue; // in seconds
+            console.log(`📍 Job ${notification.bookingId}: Distance ${jobObj.distance}, ETA ${jobObj.estimatedArrival}`);
+          } else {
+            // Fallback to simple calculation if Google Maps fails
+            const simpleDistance = calculateSimpleDistance(
+              providerLat, providerLng,
+              pickupLat, pickupLng
+            );
+            jobObj.distance = `${simpleDistance.toFixed(1)} km`;
+            jobObj.estimatedArrival = `${Math.ceil(simpleDistance * 12)} min`;
+            console.log(`⚠️ Google Maps failed for ${notification.bookingId}, using fallback: ${jobObj.distance}`);
+          }
+        } catch (mapsError) {
+          console.error(`❌ Error calculating distance for job ${notification.bookingId}:`, mapsError);
+          // Fallback
+          const simpleDistance = calculateSimpleDistance(
+            providerLat, providerLng,
+            pickupLat, pickupLng
+          );
+          jobObj.distance = `${simpleDistance.toFixed(1)} km`;
+          jobObj.estimatedArrival = `${Math.ceil(simpleDistance * 12)} min`;
+        }
+      } else {
+        console.log(`⚠️ Job ${notification.bookingId} has no pickup coordinates`);
+        jobObj.distance = 'Location unavailable';
+        jobObj.estimatedArrival = 'Unknown';
+      }
+      
+      return jobObj;
+    }));
+
+    // Mark jobs as viewed
+    if (notifications.length > 0) {
+      const jobIds = notifications.map(job => job._id);
       await Notification.updateMany(
         { _id: { $in: jobIds } },
         { $addToSet: { viewedBy: { providerId, viewedAt: new Date() } } }
       );
+      console.log(`👁️ Marked ${notifications.length} jobs as viewed by provider ${providerId}`);
     }
 
-    console.log(`🧪 TEST: Found ${jobs.length} jobs for provider ${providerId}`);
+    console.log(`✅ Returning ${jobsWithDistance.length} jobs with distances`);
 
     res.json({
       success: true,
-      count: jobs.length,
-      mode: 'TESTING - No filters applied',
-      message: 'All available jobs sent regardless of distance or service type',
-      jobs
+      count: jobsWithDistance.length,
+      jobs: jobsWithDistance
     });
 
   } catch (error) {
-    console.error('Get available jobs test error:', error);
+    console.error('❌ Get available jobs error:', error);
     res.status(500).json({ error: error.message });
   }
 };
+
+
+// Helper function for simple distance calculation (fallback)
+function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
 
 
 export const acceptJob = async (req, res) => {
