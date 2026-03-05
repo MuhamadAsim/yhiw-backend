@@ -71,7 +71,6 @@ export const getAvailableJobs = async (req, res) => {
 };
 
 
-
 export const acceptJob = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -80,12 +79,17 @@ export const acceptJob = async (req, res) => {
     const { bookingId } = req.params;
     const providerId = req.user.id;
 
+    console.log(`\n🔵 ===== ACCEPT JOB STARTED =====`);
+    console.log(`📦 Booking ID: ${bookingId}`);
+    console.log(`👤 Provider ID: ${providerId}`);
+
     const notification = await Notification.findOne({
       bookingId,
       status: 'pending'
     }).session(session);
 
     if (!notification) {
+      console.log(`❌ Job not available or expired: ${bookingId}`);
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
@@ -94,12 +98,32 @@ export const acceptJob = async (req, res) => {
       });
     }
 
+    console.log(`✅ Notification found:`);
+    console.log(`  - Customer ID: ${notification.customerId}`);
+    console.log(`  - Service: ${notification.serviceName}`);
+
     const provider = await User.findById(providerId).session(session);
     if (!provider) {
+      console.log(`❌ Provider not found: ${providerId}`);
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({ error: 'Provider not found' });
     }
+
+    console.log(`✅ Provider found: ${provider.fullName || providerId}`);
+
+    // ✅ FIXED: Map vehicle correctly from Notification to Job
+    const vehicleData = {
+      type: notification.vehicle?.vehicleType || '',  // Use vehicleType from Notification
+      makeModel: notification.vehicle?.makeModel || '',
+      year: notification.vehicle?.year || '',
+      color: notification.vehicle?.color || '',
+      licensePlate: notification.vehicle?.licensePlate || ''
+    };
+
+    console.log(`\n🔄 Vehicle data mapping:`);
+    console.log(`  From Notification:`, JSON.stringify(notification.vehicle, null, 2));
+    console.log(`  To Job:`, JSON.stringify(vehicleData, null, 2));
 
     const job = new Job({
       bookingId: notification.bookingId,
@@ -113,14 +137,8 @@ export const acceptJob = async (req, res) => {
         pickup: notification.pickup,
         dropoff: notification.dropoff,
         
-        // ✅ FIXED: Map vehicle correctly from Notification to Job
-        vehicle: {
-          type: notification.vehicle?.type?.type || '',  // Notice the nested access
-          makeModel: notification.vehicle?.makeModel || '',
-          year: notification.vehicle?.year || '',
-          color: notification.vehicle?.color || '',
-          licensePlate: notification.vehicle?.licensePlate || ''
-        },
+        // ✅ FIXED: Use mapped vehicle data
+        vehicle: vehicleData,
         
         customer: {
           name: notification.customer.name,
@@ -143,6 +161,7 @@ export const acceptJob = async (req, res) => {
     });
 
     await job.save({ session });
+    console.log(`✅ Job created in database: ${job._id}`);
 
     await ProviderLiveStatus.findOneAndUpdate(
       { providerId: providerId },
@@ -153,11 +172,14 @@ export const acceptJob = async (req, res) => {
       },
       { session, upsert: true }
     );
+    console.log(`✅ Provider status updated - now unavailable`);
 
     await Notification.deleteOne({ _id: notification._id }).session(session);
+    console.log(`✅ Notification deleted`);
 
     await session.commitTransaction();
     session.endSession();
+    console.log(`✅ Transaction committed successfully`);
 
     const customer = await User.findById(notification.customerId);
     
@@ -178,8 +200,14 @@ export const acceptJob = async (req, res) => {
       
       if (mapsData) {
         estimatedArrival = mapsData.duration;
+        console.log(`📍 Google Maps ETA: ${estimatedArrival}`);
       }
     }
+
+    console.log(`\n📤 SENDING RESPONSE:`);
+    console.log(`  success: true`);
+    console.log(`  bookingId: ${job.bookingId}`);
+    console.log(`🔵 ===== ACCEPT JOB COMPLETED =====\n`);
 
     res.json({
       success: true,
@@ -198,7 +226,11 @@ export const acceptJob = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error('Accept job error:', error);
+    console.error('\n❌❌❌ ACCEPT JOB ERROR ❌❌❌');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Full error:', error);
+    console.log('🔵 ===== ACCEPT JOB FAILED =====\n');
     res.status(500).json({ error: error.message });
   }
 };

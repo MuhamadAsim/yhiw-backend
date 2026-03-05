@@ -6,8 +6,6 @@ import User from '../models/userModel.js';
 
 
 
-
-
 export const createJobNotification = async (req, res) => {
   try {
     console.log('\n🔵 ===== CREATE JOB NOTIFICATION STARTED =====');
@@ -77,11 +75,9 @@ export const createJobNotification = async (req, res) => {
     }
     console.log('✅ No existing notification found');
 
-    // Prepare vehicle data with proper nested structure
+    // ✅ FIXED: Prepare vehicle data with vehicleType instead of nested type
     const vehicleData = {
-      type: {
-        type: vehicle?.type || ''
-      },
+      vehicleType: vehicle?.type || '',  // Map frontend 'type' to 'vehicleType'
       makeModel: vehicle?.makeModel || '',
       year: vehicle?.year || '',
       color: vehicle?.color || '',
@@ -108,7 +104,7 @@ export const createJobNotification = async (req, res) => {
       },
       dropoff: dropoff || null,
       
-      // Vehicle data
+      // ✅ FIXED: Use vehicleData with vehicleType
       vehicle: vehicleData,
       
       // Customer contact (minimal - name and phone only as per schema)

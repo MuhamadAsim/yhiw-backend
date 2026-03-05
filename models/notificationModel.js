@@ -36,11 +36,9 @@ const notificationSchema = new mongoose.Schema({
     }
   },
   
-  // ✅ FIXED: Vehicle as nested object with proper type definition
+  // ✅ FIXED: Renamed 'type' to 'vehicleType' to avoid confusion
   vehicle: {
-    type: {            // This is the field name, not schema type
-      type: String,    // This tells Mongoose that 'type' field is a String
-    },
+    vehicleType: String,  // Renamed from 'type' to 'vehicleType'
     makeModel: String,
     year: String,
     color: String,
