@@ -840,12 +840,13 @@ export const completeService = async (req, res) => {
 
 
 
-
 // GET /api/provider/job/:bookingId/active
 export const getProviderActiveJob = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const providerId = req.user.id;
+
+    console.log(`📋 Provider fetching active job: ${bookingId}`);
 
     const job = await Job.findOne({ 
       bookingId, 
@@ -854,12 +855,40 @@ export const getProviderActiveJob = async (req, res) => {
     }).populate('customerId', 'fullName phoneNumber rating');
 
     if (!job) {
-      return res.status(404).json({ error: 'Active job not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Active job not found'
+      });
     }
 
     // Get customer details
     const customer = job.customerId || {};
+
+    // Get real-time ETA from Google Maps if provider has location
+    let eta = job.bookingData?.estimatedArrival || 'Calculating...';
+    let distance = job.bookingData?.distance || 'Calculating...';
+
+    const providerStatus = await ProviderLiveStatus.findOne({ providerId });
     
+    if (providerStatus?.currentLocation?.coordinates && job.bookingData?.pickup?.coordinates) {
+      const providerLat = providerStatus.currentLocation.coordinates[1];
+      const providerLng = providerStatus.currentLocation.coordinates[0];
+      const pickupLat = job.bookingData.pickup.coordinates.lat;
+      const pickupLng = job.bookingData.pickup.coordinates.lng;
+      
+      // Use your existing Google Maps helper
+      const mapsData = await getGoogleMapsDistance(
+        providerLat, providerLng,
+        pickupLat, pickupLng
+      );
+      
+      if (mapsData) {
+        distance = mapsData.distance;
+        eta = mapsData.duration;
+        console.log(`📍 Real-time ETA: ${eta}, Distance: ${distance}`);
+      }
+    }
+
     res.json({
       success: true,
       job: {
@@ -873,13 +902,17 @@ export const getProviderActiveJob = async (req, res) => {
         dropoffLocation: job.bookingData?.dropoff?.address,
         dropoffLat: job.bookingData?.dropoff?.coordinates?.lat,
         dropoffLng: job.bookingData?.dropoff?.coordinates?.lng,
-        distance: job.bookingData?.distance || '2.5 km',
-        eta: job.bookingData?.estimatedArrival || '8-10 minutes',
+        distance: distance,
+        eta: eta,
         navigationTips: job.bookingData?.description || 'Call customer upon arrival.'
       }
     });
+
   } catch (error) {
     console.error('Get provider active job error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 };

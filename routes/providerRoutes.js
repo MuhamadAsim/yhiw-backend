@@ -17,7 +17,8 @@ import {
   updateJobStatus,
   uploadServicePhoto,
   reportServiceIssue,
-  completeService
+  completeService,
+  getProviderActiveJob
 } from '../controllers/providerController.js';
 
 const router = express.Router();
@@ -30,6 +31,8 @@ router.use(authMiddleware);
 // Job discovery & acceptance
 router.get('/available-jobs', getAvailableJobs);
 router.post('/:bookingId/accept-job', acceptJob);
+// In your providerRoutes.js
+router.get('/job/:bookingId/active', getProviderActiveJob);
 
 // Provider status & location
 router.put('/:firebaseUserId/status', updateProviderStatus);
