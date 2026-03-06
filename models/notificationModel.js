@@ -92,7 +92,7 @@ const notificationSchema = new mongoose.Schema({
     viewedAt: { type: Date, default: Date.now }
   }],
   
-  createdAt: { type: Date, default: Date.now, expires: 120 }
+  createdAt: { type: Date, default: Date.now, expires: 180 }
 
 }, { timestamps: true });
 

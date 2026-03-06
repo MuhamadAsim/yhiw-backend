@@ -383,6 +383,9 @@ export const getJobDetails = async (req, res) => {
 
 
 
+
+
+
 /**
  * Rate a completed job
  * POST /api/customer/job/:bookingId/rate
