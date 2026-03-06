@@ -176,14 +176,13 @@ function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-
 export const acceptJob = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const { bookingId } = req.params;
-    const providerId = req.user.id;
+    const providerId = req.user.id; // This comes from auth middleware - GOOD!
 
     console.log(`\n🔵 ===== ACCEPT JOB STARTED =====`);
     console.log(`📦 Booking ID: ${bookingId}`);
@@ -207,6 +206,7 @@ export const acceptJob = async (req, res) => {
     console.log(`✅ Notification found:`);
     console.log(`  - Customer ID: ${notification.customerId}`);
     console.log(`  - Service: ${notification.serviceName}`);
+    console.log(`  - Customer email already in notification:`, notification.customer?.email);
 
     const provider = await User.findById(providerId).session(session);
     if (!provider) {
@@ -220,7 +220,7 @@ export const acceptJob = async (req, res) => {
 
     // ✅ FIXED: Map vehicle correctly from Notification to Job
     const vehicleData = {
-      type: notification.vehicle?.vehicleType || '',  // Use vehicleType from Notification
+      type: notification.vehicle?.vehicleType || '',
       makeModel: notification.vehicle?.makeModel || '',
       year: notification.vehicle?.year || '',
       color: notification.vehicle?.color || '',
@@ -230,6 +230,9 @@ export const acceptJob = async (req, res) => {
     console.log(`\n🔄 Vehicle data mapping:`);
     console.log(`  From Notification:`, JSON.stringify(notification.vehicle, null, 2));
     console.log(`  To Job:`, JSON.stringify(vehicleData, null, 2));
+
+    // ✅ FIXED: Get email from notification, not from request body
+    const customerEmail = notification.customer?.email || '';
 
     const job = new Job({
       bookingId: notification.bookingId,
@@ -243,13 +246,12 @@ export const acceptJob = async (req, res) => {
         pickup: notification.pickup,
         dropoff: notification.dropoff,
         
-        // ✅ FIXED: Use mapped vehicle data
         vehicle: vehicleData,
         
         customer: {
           name: notification.customer.name,
           phone: notification.customer.phone,
-          email: notification.customer?.email || req.body.email
+          email: customerEmail, // ← FIXED: Use email from notification
         },
         urgency: notification.urgency,
         issues: notification.issues,
