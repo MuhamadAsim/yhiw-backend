@@ -7,7 +7,8 @@ import {
   cancelJob,
   getJobDetails,
   rateCompletedJob,
-  completeService
+  completeService,
+  getJobRating
 } from '../controllers/jobController.js';
 
 const router = express.Router();
@@ -26,7 +27,9 @@ router.delete('/:bookingId/cancel', authMiddleware, cancelJob);
 // Provider views full job details before accepting
 router.get('/:bookingId/details', authMiddleware, getJobDetails);
 
-router.post('/:bookingId/rate', rateCompletedJob);
+// In your customerRoutes.js, add this line with your other routes
+router.post('/:bookingId/rate', authMiddleware, rateCompletedJob);
+router.get('/:bookingId/rating', authMiddleware, getJobRating);
 
 router.post('/:bookingId/complete', completeService);
 

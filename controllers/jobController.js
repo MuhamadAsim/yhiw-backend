@@ -476,7 +476,50 @@ export const rateCompletedJob = async (req, res) => {
 };
 
 
+/**
+ * Get rating for a completed job
+ * GET /api/customer/job/:bookingId/rating
+ */
+export const getJobRating = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const customerId = req.user.id;
 
+    console.log(`📋 Fetching rating for booking: ${bookingId}`);
+
+    // Find the job - must belong to this customer
+    const job = await Job.findOne({ 
+      bookingId, 
+      customerId,
+      status: { $in: ['completed', 'completed_confirmed'] }
+    }).select('customerRating status');
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Return rating if exists
+    res.json({
+      success: true,
+      data: {
+        rating: job.customerRating?.rating || null,
+        review: job.customerRating?.review || null,
+        ratedAt: job.customerRating?.createdAt || null,
+        status: job.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Get job rating error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+};
 
 
 
