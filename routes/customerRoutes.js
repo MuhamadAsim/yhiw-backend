@@ -16,7 +16,8 @@ import {
     customerCancelJob,
 
     getRouteToPickup,
-    getLiveTracking
+    getLiveTracking,
+    getCustomerJobDetailServiceInprogress
 } from '../controllers/customerController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
@@ -42,6 +43,7 @@ router.post('/:userId/recent-locations', addRecentLocation);
 
 // Get complete job details for customer view (after provider accepted)
 router.get('/:bookingId/details', getCustomerJobDetails);
+router.get('/:bookingId/details_inprogress', getCustomerJobDetailServiceInprogress);
 
 // Get provider's real-time location (for live tracking)
 router.get('/:bookingId/provider-location', getProviderLocationForCustomer);

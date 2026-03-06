@@ -330,6 +330,8 @@ export const toggleFavoriteLocation = async (req, res) => {
   }
 };
 
+
+
 // ==================== JOB CONTROLLERS FOR CUSTOMER ====================
 
 // Get complete job details for customer
@@ -395,7 +397,8 @@ export const getCustomerJobDetails = async (req, res) => {
         'accepted': 'accepted',
         'in_progress': 'started',
         'completed': 'completed',
-        'cancelled': 'cancelled'
+        'cancelled': 'cancelled',
+        'completed_conformed':'completed_conformed',
       };
       return statusMap[dbStatus] || dbStatus;
     };
@@ -883,3 +886,167 @@ function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== CUSTOMER JOB DETAILS CONTROLLER ====================
+// GET /api/customer/:bookingId/details
+export const getCustomerJobDetailServiceInprogress = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const customerId = req.user.id;
+
+    console.log(`\n🔵 ===== GET CUSTOMER JOB DETAILS STARTED =====`);
+    console.log(`📦 Booking ID: ${bookingId}`);
+    console.log(`👤 Customer ID: ${customerId}`);
+
+    // Find the job and populate provider details
+    const job = await Job.findOne({ 
+      bookingId, 
+      customerId 
+    }).populate({
+      path: 'providerId',
+      select: 'fullName phoneNumber email profileImage rating totalJobsCompleted serviceType description'
+    });
+
+    if (!job) {
+      console.log(`❌ Job not found for booking: ${bookingId}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    console.log(`✅ Job found with status: ${job.status}`);
+
+    // Get provider's live location if available
+    const providerStatus = await ProviderLiveStatus.findOne({
+      providerId: job.providerId
+    });
+
+    // Get real-time ETA using Google Maps if we have both locations
+    let estimatedArrival = job.bookingData?.estimatedArrival || 'Calculating...';
+    let distance = job.bookingData?.distance || 'Calculating...';
+
+    if (providerStatus?.currentLocation?.coordinates && job.bookingData?.pickup?.coordinates) {
+      const providerLat = providerStatus.currentLocation.coordinates[1];
+      const providerLng = providerStatus.currentLocation.coordinates[0];
+      const pickupLat = job.bookingData.pickup.coordinates.lat;
+      const pickupLng = job.bookingData.pickup.coordinates.lng;
+
+      try {
+        const mapsData = await getGoogleMapsDistance(
+          providerLat, providerLng,
+          pickupLat, pickupLng
+        );
+        
+        if (mapsData) {
+          distance = mapsData.distance;
+          estimatedArrival = mapsData.duration;
+          console.log(`📍 Google Maps ETA: ${estimatedArrival}, Distance: ${distance}`);
+        }
+      } catch (mapsError) {
+        console.error('❌ Google Maps error:', mapsError);
+      }
+    }
+
+    // Prepare the response data in the format your frontend expects
+    const jobData = {
+      bookingId: job.bookingId,
+      status: job.status,
+      timeline: {
+        acceptedAt: job.acceptedAt,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        cancelledAt: job.cancelledAt,
+        cancelledBy: job.cancelledBy
+      },
+      provider: job.providerId ? {
+        id: job.providerId._id,
+        name: job.providerId.fullName || 'Provider',
+        phone: job.providerId.phoneNumber || '',
+        email: job.providerId.email || '',
+        profileImage: job.providerId.profileImage,
+        serviceType: job.providerId.serviceType || [],
+        rating: job.providerId.rating || 4.5,
+        totalJobsCompleted: job.providerId.totalJobsCompleted || 0,
+        description: job.providerId.description || ''
+      } : null,
+      bookingData: {
+        serviceId: job.bookingData?.serviceId,
+        serviceName: job.bookingData?.serviceName || 'Service',
+        servicePrice: job.bookingData?.servicePrice || 0,
+        serviceCategory: job.bookingData?.serviceCategory || '',
+        pickup: {
+          address: job.bookingData?.pickup?.address || 'Pickup location',
+          coordinates: job.bookingData?.pickup?.coordinates || { lat: 0, lng: 0 }
+        },
+        dropoff: job.bookingData?.dropoff ? {
+          address: job.bookingData.dropoff.address,
+          coordinates: job.bookingData.dropoff.coordinates
+        } : undefined,
+        vehicle: {
+          type: job.bookingData?.vehicle?.type || '',
+          makeModel: job.bookingData?.vehicle?.makeModel || '',
+          year: job.bookingData?.vehicle?.year || '',
+          color: job.bookingData?.vehicle?.color || '',
+          licensePlate: job.bookingData?.vehicle?.licensePlate || ''
+        },
+        urgency: job.bookingData?.urgency || 'normal',
+        issues: job.bookingData?.issues || [],
+        description: job.bookingData?.description || '',
+        payment: {
+          totalAmount: job.bookingData?.payment?.totalAmount || 0,
+          selectedTip: job.bookingData?.payment?.selectedTip || 0,
+          baseServiceFee: job.bookingData?.payment?.baseServiceFee || 0
+        },
+        isCarRental: job.bookingData?.isCarRental || false,
+        isFuelDelivery: job.bookingData?.isFuelDelivery || false,
+        isSpareParts: job.bookingData?.isSpareParts || false,
+        fuelType: job.bookingData?.fuelType,
+        partDescription: job.bookingData?.partDescription,
+        hasInsurance: job.bookingData?.hasInsurance
+      },
+      providerLocation: providerStatus?.currentLocation ? {
+        latitude: providerStatus.currentLocation.coordinates[1],
+        longitude: providerStatus.currentLocation.coordinates[0],
+        heading: providerStatus.heading || 0,
+        updatedAt: providerStatus.currentLocation.lastUpdated || new Date()
+      } : null,
+      estimatedArrival,
+      distance,
+      timeTracking: job.timeTracking || { totalSeconds: 0, isPaused: false },
+      photos: job.photos || [],
+      issues: job.issues || [],
+      customerRating: job.customerRating,
+      providerRating: job.providerRating,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt
+    };
+
+    console.log(`✅ Job details prepared successfully`);
+    console.log(`🔵 ===== GET CUSTOMER JOB DETAILS COMPLETED =====\n`);
+
+    res.json({
+      success: true,
+      data: jobData
+    });
+
+  } catch (error) {
+    console.error('❌ Get customer job details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch job details',
+      error: error.message
+    });
+  }
+};

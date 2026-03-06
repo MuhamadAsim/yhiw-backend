@@ -320,7 +320,6 @@ export const deleteAllUsers = async () => {
 
 
 
-
 /**
  * @desc    Delete all jobs from the Job model (for cleanup/debugging)
  * @route   DELETE /api/jobs/delete-all
@@ -328,15 +327,13 @@ export const deleteAllUsers = async () => {
  */
 export const printAllUsers = async () => {
   try {
-    // Import the Job model (not Notification)
-    
-    // Get count before deletion
+
     const countBefore = await Job.countDocuments();
-    
+
     console.log('\n========== DELETING ALL JOBS ==========');
     console.log(`📊 Jobs found in Job model before deletion: ${countBefore}`);
     console.log('=========================================\n');
-    
+
     if (countBefore === 0) {
       console.log('No jobs found in Job model to delete');
       return {
@@ -345,23 +342,34 @@ export const printAllUsers = async () => {
         deletedCount: 0
       };
     }
-    
-    // Delete all jobs from Job model
-    const result = await Job.deleteMany({});
-    
+
+    // Fetch all jobs to print their status
+    const jobs = await Job.find({}, { status: 1 });
+
+    console.log('\n📋 Job Status Before Deletion:\n');
+
+    jobs.forEach((job, index) => {
+      console.log(`${index + 1}. Job ID: ${job._id} | Status: ${job.status}`);
+    });
+
+    console.log('\n=========================================\n');
+
+    // Delete all jobs
+    // const result = await Job.deleteMany({});
+
     console.log(`✅ Deleted ${result.deletedCount} jobs from Job model`);
     console.log('=========================================\n');
-    
+
     // Verify deletion
     const countAfter = await Job.countDocuments();
     console.log(`📊 Jobs after deletion: ${countAfter}`);
-    
+
     return {
       success: true,
       message: `Successfully deleted ${result.deletedCount} jobs from Job model`,
       deletedCount: result.deletedCount
     };
-    
+
   } catch (error) {
     console.error('Delete All Jobs Error:', error);
     return {
