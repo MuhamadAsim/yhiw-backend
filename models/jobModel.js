@@ -78,7 +78,7 @@ const jobSchema = new mongoose.Schema({
   // Job status - ONLY these 4 values
   status: {
     type: String,
-    enum: ['accepted', 'in_progress', 'completed', 'cancelled'],
+    enum: ['accepted', 'in_progress', 'completed', 'cancelled','completed_confirmed'],
     default: 'accepted'
   },
 

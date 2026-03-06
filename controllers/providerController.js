@@ -832,3 +832,54 @@ export const completeService = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+
+
+
+
+
+
+
+
+// GET /api/provider/job/:bookingId/active
+export const getProviderActiveJob = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.id;
+
+    const job = await Job.findOne({ 
+      bookingId, 
+      providerId,
+      status: { $in: ['accepted', 'in_progress'] }
+    }).populate('customerId', 'fullName phoneNumber rating');
+
+    if (!job) {
+      return res.status(404).json({ error: 'Active job not found' });
+    }
+
+    // Get customer details
+    const customer = job.customerId || {};
+    
+    res.json({
+      success: true,
+      job: {
+        bookingId: job.bookingId,
+        customerName: customer.fullName || job.bookingData?.customer?.name || 'Customer',
+        customerPhone: customer.phoneNumber || job.bookingData?.customer?.phone || '',
+        customerRating: customer.rating || 4.5,
+        pickupLocation: job.bookingData?.pickup?.address || 'Pickup location',
+        pickupLat: job.bookingData?.pickup?.coordinates?.lat,
+        pickupLng: job.bookingData?.pickup?.coordinates?.lng,
+        dropoffLocation: job.bookingData?.dropoff?.address,
+        dropoffLat: job.bookingData?.dropoff?.coordinates?.lat,
+        dropoffLng: job.bookingData?.dropoff?.coordinates?.lng,
+        distance: job.bookingData?.distance || '2.5 km',
+        eta: job.bookingData?.estimatedArrival || '8-10 minutes',
+        navigationTips: job.bookingData?.description || 'Call customer upon arrival.'
+      }
+    });
+  } catch (error) {
+    console.error('Get provider active job error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
