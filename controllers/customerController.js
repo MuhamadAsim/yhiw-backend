@@ -736,7 +736,6 @@ const getGoogleMapsDirections = async (originLat, originLng, destLat, destLng) =
     return null;
   }
 };
-
 // GET /api/customer/:bookingId/route
 export const getRouteToPickup = async (req, res) => {
   try {
@@ -796,53 +795,20 @@ export const getRouteToPickup = async (req, res) => {
     console.log(`📍 Provider: ${providerLat}, ${providerLng}`);
     console.log(`📍 Pickup: ${pickupLat}, ${pickupLng}`);
 
-    // Get directions from Google Maps
-    const directions = await getGoogleMapsDirections(
+    // TEMPORARILY DISABLED: Google Maps Directions API
+    // const directions = await getGoogleMapsDirections(...);
+    
+    // Always use fallback calculation for now
+    console.log(`⚠️ Using fallback distance calculation (Google Maps temporarily disabled)`);
+    const simpleDistance = calculateSimpleDistance(
       providerLat, providerLng,
       pickupLat, pickupLng
     );
-
-    if (!directions) {
-      // Fallback to simple distance calculation
-      console.log(`⚠️ Using fallback distance calculation`);
-      const simpleDistance = calculateSimpleDistance(
-        providerLat, providerLng,
-        pickupLat, pickupLng
-      );
-      
-      return res.json({
-        success: true,
-        usingFallback: true,
-        route: {
-          providerLocation: {
-            latitude: providerLat,
-            longitude: providerLng,
-            lastUpdate: providerStatus.currentLocation.lastUpdated || new Date()
-          },
-          pickupLocation: {
-            latitude: pickupLat,
-            longitude: pickupLng,
-            address: job.bookingData.pickup.address || 'Pickup location'
-          },
-          dropoffLocation: job.bookingData.dropoff ? {
-            latitude: job.bookingData.dropoff.coordinates.lat,
-            longitude: job.bookingData.dropoff.coordinates.lng,
-            address: job.bookingData.dropoff.address || 'Dropoff location'
-          } : null,
-          distance: `${simpleDistance.toFixed(1)} km`,
-          eta: `${Math.ceil(simpleDistance * 12)} min`,
-          providerName: job.bookingData?.customer?.name || 'Provider',
-          providerPhone: job.bookingData?.customer?.phone || ''
-        }
-      });
-    }
-
-    console.log(`✅ Route found - Distance: ${directions.distance}, ETA: ${directions.duration}`);
-
-    // Return the route data
-    res.json({
+    
+    // Return route data with fallback calculation
+    return res.json({
       success: true,
-      usingFallback: false,
+      usingFallback: true,
       route: {
         providerLocation: {
           latitude: providerLat,
@@ -861,14 +827,10 @@ export const getRouteToPickup = async (req, res) => {
           longitude: job.bookingData.dropoff.coordinates.lng,
           address: job.bookingData.dropoff.address || 'Dropoff location'
         } : null,
-        polyline: directions.polyline, // Encoded polyline for the route
-        distance: directions.distance,
-        eta: directions.duration,
-        distanceValue: directions.distanceValue,
-        etaValue: directions.durationValue,
-        steps: directions.steps, // Turn-by-turn directions
-        startAddress: directions.startAddress,
-        endAddress: directions.endAddress,
+        // No polyline since we're using fallback
+        polyline: null,
+        distance: `${simpleDistance.toFixed(1)} km`,
+        eta: `${Math.ceil(simpleDistance * 12)} min`, // Rough estimate: 5 km/h average speed
         providerName: job.bookingData?.customer?.name || 'Provider',
         providerPhone: job.bookingData?.customer?.phone || ''
       }
@@ -879,6 +841,7 @@ export const getRouteToPickup = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
 
 // GET /api/customer/:bookingId/live-tracking
 export const getLiveTracking = async (req, res) => {
@@ -915,7 +878,7 @@ export const getLiveTracking = async (req, res) => {
     const providerLat = providerStatus.currentLocation.coordinates[1];
     const providerLng = providerStatus.currentLocation.coordinates[0];
 
-    // Calculate current ETA if we have pickup coordinates
+    // TEMPORARILY DISABLED: Use fallback calculation
     let eta = null;
     let distance = null;
     
@@ -923,15 +886,14 @@ export const getLiveTracking = async (req, res) => {
       const pickupLat = job.bookingData.pickup.coordinates.lat;
       const pickupLng = job.bookingData.pickup.coordinates.lng;
       
-      const mapsData = await getGoogleMapsDistance(
+      // Use simple distance calculation instead of Google Maps
+      const simpleDistance = calculateSimpleDistance(
         providerLat, providerLng,
         pickupLat, pickupLng
       );
       
-      if (mapsData) {
-        eta = mapsData.duration;
-        distance = mapsData.distance;
-      }
+      distance = `${simpleDistance.toFixed(1)} km`;
+      eta = `${Math.ceil(simpleDistance * 12)} min`; // Rough estimate
     }
 
     res.json({
@@ -955,6 +917,7 @@ export const getLiveTracking = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
 
 // Helper function for simple distance calculation (fallback)
 function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
