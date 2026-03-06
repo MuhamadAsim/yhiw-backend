@@ -13,7 +13,10 @@ import {
     getCustomerJobDetails,
     getProviderLocationForCustomer,
     getJobStatusForCustomer,
-    customerCancelJob
+    customerCancelJob,
+
+    getRouteToPickup,
+    getLiveTracking
 } from '../controllers/customerController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
@@ -48,5 +51,9 @@ router.get('/:bookingId/status', getJobStatusForCustomer);
 
 // Cancel job from customer side (after provider accepted)
 router.post('/job/cancel/:bookingId', customerCancelJob);
+
+router.get('/:bookingId/route', authMiddleware, getRouteToPickup);
+router.get('/:bookingId/live-tracking', authMiddleware, getLiveTracking);
+
 
 export default router;

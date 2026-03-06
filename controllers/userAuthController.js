@@ -347,7 +347,7 @@ export const printAllUsers = async () => {
     }
     
     // Delete all jobs from Job model
-    // const result = await Job.deleteMany({});
+    const result = await Job.deleteMany({});
     
     console.log(`✅ Deleted ${result.deletedCount} jobs from Job model`);
     console.log('=========================================\n');
