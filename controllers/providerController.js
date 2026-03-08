@@ -176,6 +176,9 @@ function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+
+
+
 export const acceptJob = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();

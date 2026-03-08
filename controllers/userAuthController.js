@@ -9,6 +9,7 @@ import mongoose from 'mongoose';
 
 
 
+
 // Generate JWT Token
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -320,61 +321,121 @@ export const deleteAllUsers = async () => {
 
 
 
-/**
- * @desc    Delete all jobs from the Job model (for cleanup/debugging)
- * @route   DELETE /api/jobs/delete-all
- * @access  Private/Admin only
- */
+// /**
+//  * @desc    Delete all jobs from the Job model (for cleanup/debugging)
+//  * @route   DELETE /api/jobs/delete-all
+//  * @access  Private/Admin only
+//  */
+// export const printAllUsers = async () => {
+//   try {
+
+//     const countBefore = await Job.countDocuments();
+
+//     console.log('\n========== DELETING ALL JOBS ==========');
+//     console.log(`📊 Jobs found in Job model before deletion: ${countBefore}`);
+//     console.log('=========================================\n');
+
+//     if (countBefore === 0) {
+//       console.log('No jobs found in Job model to delete');
+//       return {
+//         success: true,
+//         message: 'No jobs found to delete',
+//         deletedCount: 0
+//       };
+//     }
+
+//     // Fetch all jobs to print their status
+//     const jobs = await Job.find({}, { status: 1 });
+
+//     console.log('\n📋 Job Status Before Deletion:\n');
+
+//     jobs.forEach((job, index) => {
+//       console.log(`${index + 1}. Job ID: ${job._id} | Status: ${job.status}`);
+//     });
+
+//     console.log('\n=========================================\n');
+
+//     // Delete all jobs
+//     // const result = await Job.deleteMany({});
+
+//     console.log(`✅ Deleted ${result.deletedCount} jobs from Job model`);
+//     console.log('=========================================\n');
+
+//     // Verify deletion
+//     const countAfter = await Job.countDocuments();
+//     console.log(`📊 Jobs after deletion: ${countAfter}`);
+
+//     return {
+//       success: true,
+//       message: `Successfully deleted ${result.deletedCount} jobs from Job model`,
+//       deletedCount: result.deletedCount
+//     };
+
+//   } catch (error) {
+//     console.error('Delete All Jobs Error:', error);
+//     return {
+//       success: false,
+//       message: 'Server error deleting jobs',
+//       error: error.message
+//     };
+//   }
+// };
+
+
+
+
+
+
+
+
+
+
 export const printAllUsers = async () => {
   try {
+    console.log("\n========== RESETTING JOB COLLECTION ==========");
 
+    // Count before deletion
     const countBefore = await Job.countDocuments();
+    console.log(`📊 Jobs before reset: ${countBefore}`);
 
-    console.log('\n========== DELETING ALL JOBS ==========');
-    console.log(`📊 Jobs found in Job model before deletion: ${countBefore}`);
-    console.log('=========================================\n');
+    // Print existing indexes
+    const indexes = await mongoose.connection.collection("jobs").indexes();
 
-    if (countBefore === 0) {
-      console.log('No jobs found in Job model to delete');
-      return {
-        success: true,
-        message: 'No jobs found to delete',
-        deletedCount: 0
-      };
-    }
-
-    // Fetch all jobs to print their status
-    const jobs = await Job.find({}, { status: 1 });
-
-    console.log('\n📋 Job Status Before Deletion:\n');
-
-    jobs.forEach((job, index) => {
-      console.log(`${index + 1}. Job ID: ${job._id} | Status: ${job.status}`);
+    console.log("\n📑 Existing Indexes:");
+    indexes.forEach((index) => {
+      console.log(`- ${index.name}`);
     });
 
-    console.log('\n=========================================\n');
+    // Remove old jobNumber index if it exists
+    const jobNumberIndex = indexes.find(
+      (index) => index.name === "jobNumber_1"
+    );
+
+    if (jobNumberIndex) {
+      await mongoose.connection.collection("jobs").dropIndex("jobNumber_1");
+      console.log("🗑 Removed old index: jobNumber_1");
+    }
 
     // Delete all jobs
-    // const result = await Job.deleteMany({});
+    const result = await Job.deleteMany({});
 
-    console.log(`✅ Deleted ${result.deletedCount} jobs from Job model`);
-    console.log('=========================================\n');
+    console.log(`🗑 Deleted ${result.deletedCount} jobs`);
 
     // Verify deletion
     const countAfter = await Job.countDocuments();
-    console.log(`📊 Jobs after deletion: ${countAfter}`);
+    console.log(`📊 Jobs after reset: ${countAfter}`);
+
+    console.log("==============================================\n");
 
     return {
       success: true,
-      message: `Successfully deleted ${result.deletedCount} jobs from Job model`,
       deletedCount: result.deletedCount
     };
 
   } catch (error) {
-    console.error('Delete All Jobs Error:', error);
+    console.error("\n❌ RESET JOBS ERROR:", error.message);
     return {
       success: false,
-      message: 'Server error deleting jobs',
       error: error.message
     };
   }

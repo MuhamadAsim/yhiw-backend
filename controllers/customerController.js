@@ -466,6 +466,9 @@ export const getCustomerJobDetails = async (req, res) => {
   }
 };
 
+
+
+
 // Get provider's real-time location
 export const getProviderLocationForCustomer = async (req, res) => {
   try {
@@ -535,6 +538,9 @@ export const getProviderLocationForCustomer = async (req, res) => {
   }
 };
 
+
+
+
 // GET /api/jobs/:bookingId/status
 export const getJobStatusForCustomer = async (req, res) => {
   try {
@@ -554,7 +560,9 @@ export const getJobStatusForCustomer = async (req, res) => {
       'accepted': 'accepted',
       'in_progress': 'started',
       'completed': 'completed',
-      'cancelled': 'cancelled'
+      'cancelled': 'cancelled',
+      'completed_confirmed': 'completed_confirmed',
+
     };
 
     res.json({
