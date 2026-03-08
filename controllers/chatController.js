@@ -1,9 +1,9 @@
 // controllers/chatController.js
 import Chat from '../models/chatModel.js';
-import Job from '../models/Job.js'; // Import your Job model
+import Job from '../models/jobModel.js'; // Import your Job model
 
 // Helper to get job details from your job service
-const getJobDetails = async (bookingId) => {
+export const getJobDetails = async (bookingId) => {
   try {
     console.log(`🔍 Fetching job details for booking: ${bookingId}`);
     
