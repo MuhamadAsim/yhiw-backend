@@ -1,4 +1,4 @@
-// models/Chat.js
+// models/chatModel.js
 import mongoose from 'mongoose';
 
 const messageSchema = new mongoose.Schema({
@@ -8,7 +8,7 @@ const messageSchema = new mongoose.Schema({
   },
   senderType: {
     type: String,
-    enum: ['user', 'provider'],
+    enum: ['customer', 'provider'], // Changed from 'user' to 'customer' to match frontend
     required: true,
   },
   text: {

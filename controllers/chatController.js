@@ -1,12 +1,20 @@
 // controllers/chatController.js
 import Chat from '../models/chatModel.js';
 
+// Helper to get job details (you'll need to implement this based on your job service)
+const getJobDetails = async (bookingId) => {
+  // TODO: Implement this function to fetch customerId and providerId from your job service
+  // This could be a call to your job API or database query
+  // For now, return null - you'll need to implement based on your system
+  return null;
+};
+
 // Get chat history for a booking
 export const getChatHistory = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const userId = req.user?.uid || req.user?.id; // From auth middleware
-    const userType = req.user?.type; // 'user' or 'provider'
+    const userId = req.user?.id; // MongoDB ID from auth middleware
+    const userType = req.user?.type; // 'customer' or 'provider' from auth
 
     if (!bookingId) {
       return res.status(400).json({
@@ -28,7 +36,7 @@ export const getChatHistory = async (req, res) => {
     }
 
     // Verify user has access to this chat
-    if (userType === 'user' && chat.customerId !== userId) {
+    if (userType === 'customer' && chat.customerId !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized access to this chat',
@@ -43,7 +51,7 @@ export const getChatHistory = async (req, res) => {
     }
 
     // Mark messages as delivered if they were sent by the other party
-    if (userType === 'user') {
+    if (userType === 'customer') {
       // Mark provider messages as delivered
       chat.messages.forEach(msg => {
         if (msg.senderType === 'provider' && msg.status === 'sent') {
@@ -54,7 +62,7 @@ export const getChatHistory = async (req, res) => {
     } else if (userType === 'provider') {
       // Mark customer messages as delivered
       chat.messages.forEach(msg => {
-        if (msg.senderType === 'user' && msg.status === 'sent') {
+        if (msg.senderType === 'customer' && msg.status === 'sent') {
           msg.status = 'delivered';
         }
       });
@@ -81,9 +89,8 @@ export const getChatHistory = async (req, res) => {
 export const sendMessage = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { text, receiverId } = req.body;
-    const userId = req.user?.uid || req.user?.id;
-    const userType = req.user?.type; // 'user' or 'provider'
+    const { text, senderType } = req.body; // Now expecting senderType from frontend
+    const userId = req.user?.id; // MongoDB ID from auth middleware
 
     if (!bookingId || !text) {
       return res.status(400).json({
@@ -99,16 +106,28 @@ export const sendMessage = async (req, res) => {
       });
     }
 
+    if (!senderType || !['customer', 'provider'].includes(senderType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid sender type (customer/provider) is required',
+      });
+    }
+
     // Find or create chat
     let chat = await Chat.findOne({ bookingId });
 
     if (!chat) {
-      // Need customerId and providerId to create chat
-      // You might need to fetch these from job/booking service
-      // For now, we'll assume they're passed or fetched from elsewhere
+      // Need to fetch customerId and providerId from job service
+      const jobDetails = await getJobDetails(bookingId);
       
-      // You can modify this to fetch from your job service
-      const { customerId, providerId } = req.body;
+      if (!jobDetails) {
+        return res.status(400).json({
+          success: false,
+          message: 'Could not find job details for this booking',
+        });
+      }
+
+      const { customerId, providerId } = jobDetails;
       
       if (!customerId || !providerId) {
         return res.status(400).json({
@@ -126,14 +145,14 @@ export const sendMessage = async (req, res) => {
     }
 
     // Verify user has access to this chat
-    if (userType === 'user' && chat.customerId !== userId) {
+    if (senderType === 'customer' && chat.customerId !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized to send message in this chat',
       });
     }
 
-    if (userType === 'provider' && chat.providerId !== userId) {
+    if (senderType === 'provider' && chat.providerId !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized to send message in this chat',
@@ -143,7 +162,7 @@ export const sendMessage = async (req, res) => {
     // Create new message
     const newMessage = {
       senderId: userId,
-      senderType: userType,
+      senderType: senderType, // Use senderType from request
       text: text.trim(),
       status: 'sent',
       timestamp: new Date(),
@@ -178,7 +197,7 @@ export const pollNewMessages = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { lastMessageId, lastTimestamp } = req.query;
-    const userId = req.user?.uid || req.user?.id;
+    const userId = req.user?.id;
     const userType = req.user?.type;
 
     if (!bookingId) {
@@ -198,7 +217,7 @@ export const pollNewMessages = async (req, res) => {
     }
 
     // Verify user has access to this chat
-    if (userType === 'user' && chat.customerId !== userId) {
+    if (userType === 'customer' && chat.customerId !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized access to this chat',
@@ -269,7 +288,7 @@ export const markMessagesAsRead = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { messageIds } = req.body;
-    const userId = req.user?.uid || req.user?.id;
+    const userId = req.user?.id;
     const userType = req.user?.type;
 
     if (!bookingId || !messageIds || !Array.isArray(messageIds)) {
@@ -289,7 +308,7 @@ export const markMessagesAsRead = async (req, res) => {
     }
 
     // Verify user has access to this chat
-    if (userType === 'user' && chat.customerId !== userId) {
+    if (userType === 'customer' && chat.customerId !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized access to this chat',
@@ -337,7 +356,7 @@ export const markMessagesAsRead = async (req, res) => {
 export const getUnreadCount = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const userId = req.user?.uid || req.user?.id;
+    const userId = req.user?.id;
     const userType = req.user?.type;
 
     if (!bookingId) {
@@ -357,7 +376,7 @@ export const getUnreadCount = async (req, res) => {
     }
 
     // Verify user has access to this chat
-    if (userType === 'user' && chat.customerId !== userId) {
+    if (userType === 'customer' && chat.customerId !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized access to this chat',
