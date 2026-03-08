@@ -1,13 +1,32 @@
 // controllers/chatController.js
 import Chat from '../models/chatModel.js';
+import Job from '../models/Job.js'; // Import your Job model
 
-// Helper to get job details (you'll need to implement this based on your job service)
+// Helper to get job details from your job service
 const getJobDetails = async (bookingId) => {
-  // TODO: Implement this function to fetch customerId and providerId from your job service
-  // This could be a call to your job API or database query
-  // For now, return null - you'll need to implement based on your system
-  return null;
+  try {
+    console.log(`🔍 Fetching job details for booking: ${bookingId}`);
+    
+    // Find the job in your database using the bookingId
+    const job = await Job.findOne({ bookingId })
+      .select('customerId providerId'); // Only select what we need
+    
+    if (job) {
+      console.log(`✅ Found job: customerId=${job.customerId}, providerId=${job.providerId}`);
+      return {
+        customerId: job.customerId.toString(), // Convert ObjectId to string
+        providerId: job.providerId.toString()   // Convert ObjectId to string
+      };
+    }
+    
+    console.log(`❌ No job found for bookingId: ${bookingId}`);
+    return null;
+  } catch (error) {
+    console.error('Error fetching job details:', error);
+    return null;
+  }
 };
+
 
 // Get chat history for a booking
 export const getChatHistory = async (req, res) => {

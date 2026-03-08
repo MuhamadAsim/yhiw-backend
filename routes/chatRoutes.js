@@ -6,6 +6,7 @@ import {
   pollNewMessages,
   markMessagesAsRead,
   getUnreadCount,
+  getJobDetails
 } from '../controllers/chatController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
@@ -28,5 +29,8 @@ router.put('/:bookingId/read', markMessagesAsRead);
 
 // Get unread message count
 router.get('/:bookingId/unread', getUnreadCount);
+
+router.get('/:bookingId/details', getJobDetails);
+
 
 export default router;
