@@ -572,7 +572,6 @@ export const providerCancelJob = async (req, res) => {
 };
 
 // ==================== SERVICE IN PROGRESS CONTROLLERS ====================
-
 export const getActiveJob = async (req, res) => {
   try {
     const providerId = req.user.id;
@@ -916,6 +915,192 @@ export const getProviderActiveJob = async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: error.message 
+    });
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * Cancel job (called by provider)
+ * Endpoint: POST /api/provider/:bookingId/cancel
+ */
+export const cancelJobByProvider = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { reason, cancellationDetails } = req.body;
+    const providerId = req.user.userId; // Assuming auth middleware sets req.user
+
+    // Find the job
+    const job = await Job.findOne({ bookingId });
+    
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Verify this provider is assigned to the job
+    if (job.providerId.toString() !== providerId) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to cancel this job'
+      });
+    }
+
+    // Check if job can be cancelled (only accepted or in_progress)
+    if (!['accepted', 'in_progress'].includes(job.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel job with status: ${job.status}`
+      });
+    }
+
+    // Update job status to cancelled
+    job.status = 'cancelled';
+    job.cancelledAt = new Date();
+    job.cancelledBy = 'provider';
+
+    // Save cancellation reason if provided
+    if (reason) {
+      job.cancellationReason = reason;
+    }
+
+    // Add to issues if there's a specific issue
+    if (cancellationDetails?.issue) {
+      job.issues.push({
+        type: 'cancellation',
+        description: cancellationDetails.issue,
+        severity: cancellationDetails.severity || 'medium',
+        reportedAt: new Date(),
+        status: 'open'
+      });
+    }
+
+    await job.save();
+
+    // TODO: Notify customer via push notification/socket
+    // notifyCustomer(job.customerId, 'PROVIDER_CANCELLED', { bookingId, reason });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Job cancelled successfully',
+      data: {
+        bookingId: job.bookingId,
+        status: job.status,
+        cancelledAt: job.cancelledAt,
+        cancelledBy: job.cancelledBy
+      }
+    });
+
+  } catch (error) {
+    console.error('Error cancelling job by provider:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to cancel job',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get job status for provider
+ * Endpoint: GET /api/provider/:bookingId/status
+ */
+export const getJobStatusForProvider = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.userId;
+
+    // Find the job and select only necessary fields for status check
+    const job = await Job.findOne({ 
+      bookingId,
+      providerId // Ensure this provider is assigned
+    }).select({
+      bookingId: 1,
+      status: 1,
+      cancelledAt: 1,
+      cancelledBy: 1,
+      startedAt: 1,
+      completedAt: 1,
+      'issues': { $slice: -1 }, // Only get latest issue if any
+      'timeTracking.isPaused': 1
+    });
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found or not assigned to you'
+      });
+    }
+
+    // Prepare response with relevant status info
+    const response = {
+      success: true,
+      bookingId: job.bookingId,
+      status: job.status,
+      timestamp: new Date().toISOString()
+    };
+
+    // Add cancellation info if job is cancelled
+    if (job.status === 'cancelled') {
+      response.cancellationInfo = {
+        cancelledAt: job.cancelledAt,
+        cancelledBy: job.cancelledBy,
+        reason: job.cancellationReason || 'No reason provided'
+      };
+    }
+
+    // Add in-progress info if applicable
+    if (job.status === 'in_progress') {
+      response.progressInfo = {
+        startedAt: job.startedAt,
+        isPaused: job.timeTracking?.isPaused || false
+      };
+    }
+
+    // Add completed info if applicable
+    if (job.status === 'completed') {
+      response.completionInfo = {
+        completedAt: job.completedAt
+      };
+    }
+
+    // If there's a recent issue, include it
+    if (job.issues && job.issues.length > 0) {
+      const latestIssue = job.issues[job.issues.length - 1];
+      if (latestIssue && latestIssue.reportedAt) {
+        const hoursSinceIssue = (Date.now() - new Date(latestIssue.reportedAt).getTime()) / (1000 * 60 * 60);
+        // Only include issues from last 24 hours
+        if (hoursSinceIssue < 24) {
+          response.recentIssue = {
+            type: latestIssue.type,
+            description: latestIssue.description,
+            severity: latestIssue.severity,
+            reportedAt: latestIssue.reportedAt
+          };
+        }
+      }
+    }
+
+    return res.status(200).json(response);
+
+  } catch (error) {
+    console.error('Error getting job status:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get job status',
+      error: error.message
     });
   }
 };

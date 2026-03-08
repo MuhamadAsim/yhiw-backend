@@ -18,7 +18,9 @@ import {
   uploadServicePhoto,
   reportServiceIssue,
   completeService,
-  getProviderActiveJob
+  getProviderActiveJob,
+  cancelJobByProvider,
+  getJobStatusForProvider
 } from '../controllers/providerController.js';
 
 const router = express.Router();
@@ -30,9 +32,11 @@ router.use(authMiddleware);
 
 // Job discovery & acceptance
 router.get('/available-jobs', getAvailableJobs);
+
 router.post('/:bookingId/accept-job', acceptJob);
+
 // In your providerRoutes.js
-router.get('/job/:bookingId/active', getProviderActiveJob);
+router.get('/:bookingId/active', getProviderActiveJob);
 
 // Provider status & location
 router.put('/:firebaseUserId/status', updateProviderStatus);
@@ -50,15 +54,22 @@ router.delete('/cancel/:bookingId', providerCancelJob);
 router.get('/:bookingId/active-job', getActiveJob);
 
 // Job status updates (start/pause/add time)
-router.patch('/job/:bookingId/status', updateJobStatus);
+router.patch('/:bookingId/status', updateJobStatus);
 
 // Photo upload (you'll need multer middleware for this)
-router.post('/job/:bookingId/photos', uploadServicePhoto);
+router.post('/:bookingId/photos', uploadServicePhoto);
 
 // Report issue
-router.post('/job/:bookingId/issues', reportServiceIssue);
+router.post('/:bookingId/issues', reportServiceIssue);
 
 // Complete service
-router.post('/job/:bookingId/complete', completeService);
+router.post('/:bookingId/complete', completeService);
+
+
+// Job status endpoints
+router.get('/job/:bookingId/status', getJobStatusForProvider);
+
+router.post('/:bookingId/cancel', cancelJobByProvider);
+
 
 export default router;

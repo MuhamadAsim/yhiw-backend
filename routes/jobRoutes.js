@@ -8,7 +8,7 @@ import {
   getJobDetails,
   rateCompletedJob,
   completeService,
-  getJobRating
+  getJobRating,
 } from '../controllers/jobController.js';
 
 const router = express.Router();
@@ -29,6 +29,8 @@ router.get('/:bookingId/details', authMiddleware, getJobDetails);
 
 // In your customerRoutes.js, add this line with your other routes
 router.post('/:bookingId/rate', authMiddleware, rateCompletedJob);
+
+
 router.get('/:bookingId/rating', authMiddleware, getJobRating);
 
 router.post('/:bookingId/complete', completeService);
