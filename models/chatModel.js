@@ -8,7 +8,7 @@ const messageSchema = new mongoose.Schema({
   },
   senderType: {
     type: String,
-    enum: ['customer', 'provider'], // Changed from 'user' to 'customer' to match frontend
+    enum: ['customer', 'provider'],
     required: true,
   },
   text: {
@@ -55,12 +55,11 @@ const chatSchema = new mongoose.Schema({
   },
 });
 
-// Update lastMessageAt when new message is added
-chatSchema.pre('save', function(next) {
+// FIXED: Remove the next parameter and just return
+chatSchema.pre('save', function() {
   if (this.messages.length > 0) {
     this.lastMessageAt = this.messages[this.messages.length - 1].timestamp;
   }
-  next();
 });
 
 const Chat = mongoose.model('Chat', chatSchema);
