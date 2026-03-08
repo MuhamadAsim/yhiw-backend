@@ -7,12 +7,12 @@ import {
   markMessagesAsRead,
   getUnreadCount,
 } from '../controllers/chatController.js';
-import { authenticateUser } from '../middleware/authMiddleware.js';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
 
 // All chat routes require authentication
-router.use(authenticateUser);
+router.use(authMiddleware);
 
 // Get chat history for a booking
 router.get('/:bookingId/messages', getChatHistory);
