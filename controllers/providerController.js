@@ -1313,3 +1313,65 @@ export const getJobStatusForProvider = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+
+
+
+// POST /api/provider/:bookingId/route
+export const getProviderRoute = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.id;
+    const { originLat, originLng, destLat, destLng } = req.body;
+
+    console.log(`📍 Calculating route for provider ${providerId}, booking ${bookingId}`);
+    console.log(`📍 From: (${originLat}, ${originLng}) To: (${destLat}, ${destLng})`);
+
+    // Validate coordinates
+    if (!originLat || !originLng || !destLat || !destLng) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing coordinates'
+      });
+    }
+
+    // Call Google Maps Directions API
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&key=${process.env.GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
+    
+    const response = await axios.get(url);
+    
+    if (response.data.status === 'OK' && response.data.routes.length > 0) {
+      const route = response.data.routes[0];
+      const leg = route.legs[0];
+      
+      res.json({
+        success: true,
+        route: {
+          polyline: route.overview_polyline.points,
+          distance: leg.distance.text,
+          eta: leg.duration.text,
+          distanceValue: leg.distance.value,
+          etaValue: leg.duration.value,
+          startAddress: leg.start_address,
+          endAddress: leg.end_address
+        }
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: 'No route found',
+        googleStatus: response.data.status
+      });
+    }
+  } catch (error) {
+    console.error('Route calculation error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+};

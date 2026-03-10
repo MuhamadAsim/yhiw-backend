@@ -20,7 +20,8 @@ import {
   completeService,
   getProviderActiveJob,
   cancelJobByProvider,
-  getJobStatusForProvider
+  getJobStatusForProvider,
+  getProviderRoute
 } from '../controllers/providerController.js';
 
 const router = express.Router();
@@ -42,6 +43,8 @@ router.get('/:bookingId/active', getProviderActiveJob);
 router.put('/:firebaseUserId/status', updateProviderStatus);
 router.get('/:firebaseUserId/status', getProviderStatus);
 router.post('/:firebaseUserId/location', updateProviderLocation);
+// POST /api/provider/:bookingId/route - Get route directions from Google Maps
+router.post('/:bookingId/route', authMiddleware, getProviderRoute);
 
 // Performance & history
 router.get('/:firebaseUserId/info', getProviderInfo);
