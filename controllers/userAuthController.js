@@ -121,6 +121,10 @@ export const createUser = async (req, res) => {
   }
 };
 
+
+
+
+
 /**
  * @desc    Get user by Firebase UID (Signin)
  * @route   GET /api/users/:firebaseUserId

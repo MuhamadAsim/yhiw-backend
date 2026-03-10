@@ -8,7 +8,7 @@ import {
   updateProviderStatus,
   updateProviderLocation,
   getProviderStatus,
-  getProviderPerformance,
+  getProviderInfo,
   getRecentJobs,
   providerCancelJob,
   
@@ -44,7 +44,7 @@ router.get('/:firebaseUserId/status', getProviderStatus);
 router.post('/:firebaseUserId/location', updateProviderLocation);
 
 // Performance & history
-router.get('/:firebaseUserId/performance', getProviderPerformance);
+router.get('/:firebaseUserId/info', getProviderInfo);
 router.get('/:firebaseUserId/recent-jobs', getRecentJobs);
 router.delete('/cancel/:bookingId', providerCancelJob);
 

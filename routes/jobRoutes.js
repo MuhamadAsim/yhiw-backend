@@ -7,7 +7,6 @@ import {
   cancelJob,
   getJobDetails,
   rateCompletedJob,
-  completeService,
   getJobRating,
 } from '../controllers/jobController.js';
 
