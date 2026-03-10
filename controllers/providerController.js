@@ -1321,7 +1321,6 @@ export const getJobStatusForProvider = async (req, res) => {
 
 
 
-
 // POST /api/provider/:bookingId/route
 export const getProviderRoute = async (req, res) => {
   try {
@@ -1340,14 +1339,29 @@ export const getProviderRoute = async (req, res) => {
       });
     }
 
+    // Check if Google Maps API key exists
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      console.error('❌ GOOGLE_MAPS_API_KEY not found in environment variables');
+      return res.status(500).json({
+        success: false,
+        message: 'Google Maps API key not configured'
+      });
+    }
+
     // Call Google Maps Directions API
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&key=${process.env.GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&key=${apiKey}&mode=driving&alternatives=false`;
     
+    console.log(`🔄 Calling Google Maps Directions API...`);
     const response = await axios.get(url);
+    
+    console.log(`📊 Google Maps Response Status: ${response.data.status}`);
     
     if (response.data.status === 'OK' && response.data.routes.length > 0) {
       const route = response.data.routes[0];
       const leg = route.legs[0];
+      
+      console.log(`✅ Route found: ${leg.distance.text}, ${leg.duration.text}`);
       
       res.json({
         success: true,
@@ -1362,14 +1376,22 @@ export const getProviderRoute = async (req, res) => {
         }
       });
     } else {
+      // Log the error details
+      console.error(`❌ Google Maps API error: ${response.data.status}`);
+      if (response.data.error_message) {
+        console.error(`❌ Error message: ${response.data.error_message}`);
+      }
+      
+      // Return a more helpful error
       res.status(400).json({
         success: false,
         message: 'No route found',
-        googleStatus: response.data.status
+        googleStatus: response.data.status,
+        googleError: response.data.error_message || 'Unknown error'
       });
     }
   } catch (error) {
-    console.error('Route calculation error:', error);
+    console.error('❌ Route calculation error:', error);
     res.status(500).json({ 
       success: false, 
       error: error.message 
