@@ -33,7 +33,6 @@ router.post('/:bookingId/rate', authMiddleware, rateCompletedJob);
 
 router.get('/:bookingId/rating', authMiddleware, getJobRating);
 
-router.post('/:bookingId/complete', completeService);
 
 
 

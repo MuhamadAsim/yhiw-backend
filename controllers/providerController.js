@@ -779,6 +779,11 @@ export const reportServiceIssue = async (req, res) => {
   }
 };
 
+
+
+
+
+
 export const completeService = async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -842,14 +847,20 @@ export const completeService = async (req, res) => {
 
 
 
+
+
+
 // GET /api/provider/job/:bookingId/active
 export const getProviderActiveJob = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const providerId = req.user.id;
 
-    console.log(`📋 Provider fetching active job: ${bookingId}`);
+    console.log(`\n🔵 ===== PROVIDER FETCHING ACTIVE JOB =====`);
+    console.log(`📋 Booking ID: ${bookingId}`);
+    console.log(`👤 Provider ID: ${providerId}`);
 
+    // Find the job with proper population
     const job = await Job.findOne({ 
       bookingId, 
       providerId,
@@ -857,61 +868,124 @@ export const getProviderActiveJob = async (req, res) => {
     }).populate('customerId', 'fullName phoneNumber rating');
 
     if (!job) {
+      console.log(`❌ Active job not found for provider`);
       return res.status(404).json({
         success: false,
         message: 'Active job not found'
       });
     }
 
+    console.log(`✅ Job found - Status: ${job.status}`);
+
     // Get customer details
     const customer = job.customerId || {};
 
-    // Get real-time ETA from Google Maps if provider has location
-    let eta = job.bookingData?.estimatedArrival || 'Calculating...';
-    let distance = job.bookingData?.distance || 'Calculating...';
+    // ========== LIVE GOOGLE MAPS CALCULATION ==========
+    let distance = 'Calculating...';
+    let eta = 'Calculating...';
+    let routePolyline = null;
+    let usingRealTimeETA = false;
+    let mapsError = null;
 
+    // Get provider's current location
     const providerStatus = await ProviderLiveStatus.findOne({ providerId });
     
-    if (providerStatus?.currentLocation?.coordinates && job.bookingData?.pickup?.coordinates) {
+    // Check if we have all required coordinates
+    if (providerStatus?.currentLocation?.coordinates && 
+        job.bookingData?.pickup?.coordinates?.lat && 
+        job.bookingData?.pickup?.coordinates?.lng) {
+      
       const providerLat = providerStatus.currentLocation.coordinates[1];
       const providerLng = providerStatus.currentLocation.coordinates[0];
       const pickupLat = job.bookingData.pickup.coordinates.lat;
       const pickupLng = job.bookingData.pickup.coordinates.lng;
       
-      // Use your existing Google Maps helper
-      const mapsData = await getGoogleMapsDistance(
-        providerLat, providerLng,
-        pickupLat, pickupLng
-      );
-      
-      if (mapsData) {
-        distance = mapsData.distance;
-        eta = mapsData.duration;
-        console.log(`📍 Real-time ETA: ${eta}, Distance: ${distance}`);
+      // Validate coordinates
+      if (!isNaN(providerLat) && !isNaN(providerLng) && 
+          !isNaN(pickupLat) && !isNaN(pickupLng)) {
+        
+        console.log(`📍 Calculating route from (${providerLat},${providerLng}) to (${pickupLat},${pickupLng})`);
+        
+        try {
+          // Use Google Maps helper to get fresh data
+          const mapsData = await getGoogleMapsDistance(
+            providerLat, providerLng,
+            pickupLat, pickupLng
+          );
+          
+          if (mapsData) {
+            distance = mapsData.distance;      // e.g., "5.2 km"
+            eta = mapsData.duration;           // e.g., "12 mins"
+            routePolyline = mapsData.polyline; // For drawing route on map
+            usingRealTimeETA = true;
+            console.log(`✅ Real-time ETA: ${eta}, Distance: ${distance}`);
+          } else {
+            mapsError = 'Google Maps returned no data';
+            console.log(`⚠️ ${mapsError}`);
+          }
+        } catch (googleError) {
+          mapsError = googleError.message;
+          console.error(`❌ Google Maps API error:`, googleError.message);
+          
+          // Fallback to simple calculation only if Google completely fails
+          const simpleDistance = calculateSimpleDistance(
+            providerLat, providerLng,
+            pickupLat, pickupLng
+          );
+          distance = `${simpleDistance.toFixed(1)} km (approx)`;
+          eta = `${Math.ceil(simpleDistance * 12)} min (approx)`;
+          console.log(`⚠️ Using fallback calculation: ${distance}, ${eta}`);
+        }
+      } else {
+        mapsError = 'Invalid coordinates detected';
+        console.log(`⚠️ ${mapsError}`);
       }
+    } else {
+      mapsError = 'Missing location data - provider or pickup coordinates not available';
+      console.log(`⚠️ ${mapsError}`);
     }
 
-    res.json({
+    // Prepare response with LIVE Google Maps data
+    const response = {
       success: true,
+      status: job.status,
+      usingRealTimeETA,
+      mapsError, // Include for debugging (remove in production if needed)
       job: {
         bookingId: job.bookingId,
         customerName: customer.fullName || job.bookingData?.customer?.name || 'Customer',
         customerPhone: customer.phoneNumber || job.bookingData?.customer?.phone || '',
         customerRating: customer.rating || 4.5,
+        
+        // Location details
         pickupLocation: job.bookingData?.pickup?.address || 'Pickup location',
-        pickupLat: job.bookingData?.pickup?.coordinates?.lat,
-        pickupLng: job.bookingData?.pickup?.coordinates?.lng,
-        dropoffLocation: job.bookingData?.dropoff?.address,
-        dropoffLat: job.bookingData?.dropoff?.coordinates?.lat,
-        dropoffLng: job.bookingData?.dropoff?.coordinates?.lng,
-        distance: distance,
-        eta: eta,
-        navigationTips: job.bookingData?.description || 'Call customer upon arrival.'
+        pickupLat: job.bookingData?.pickup?.coordinates?.lat || null,
+        pickupLng: job.bookingData?.pickup?.coordinates?.lng || null,
+        dropoffLocation: job.bookingData?.dropoff?.address || null,
+        dropoffLat: job.bookingData?.dropoff?.coordinates?.lat || null,
+        dropoffLng: job.bookingData?.dropoff?.coordinates?.lng || null,
+        
+        // LIVE Google Maps data (fresh every request)
+        distance: distance,  // Real distance from Google Maps
+        eta: eta,            // Real ETA with traffic from Google Maps
+        routePolyline: routePolyline, // For drawing route on map
+        
+        // Additional info
+        navigationTips: job.bookingData?.description || 
+                       job.bookingData?.specialInstructions || 
+                       'Call customer upon arrival.',
+        serviceType: job.bookingData?.serviceType || 'Towing Service',
+        vehicleType: job.bookingData?.vehicleType || 'Sedan',
+        estimatedEarnings: job.estimatedEarnings || job.bookingData?.estimatedPrice || '0',
+        createdAt: job.createdAt
       }
-    });
+    };
+
+    console.log(`✅ Returning active job with LIVE Google Maps data`);
+    return res.json(response);
 
   } catch (error) {
-    console.error('Get provider active job error:', error);
+    console.error('❌ Get provider active job error:', error);
     res.status(500).json({ 
       success: false, 
       error: error.message 
@@ -919,9 +993,18 @@ export const getProviderActiveJob = async (req, res) => {
   }
 };
 
-
-
-
+// Helper function for simple distance calculation (fallback only)
+function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
 
 
 
@@ -1012,6 +1095,10 @@ export const cancelJobByProvider = async (req, res) => {
     });
   }
 };
+
+
+
+
 
 /**
  * Get job status for provider
