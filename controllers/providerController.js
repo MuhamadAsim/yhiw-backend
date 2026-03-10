@@ -570,7 +570,7 @@ export const getProviderInfo = async (req, res) => {
         profile: {
           name: provider.fullName,
           providerId: provider._id.toString().slice(-6), // Format like PRV-001234
-          email: provider.email,
+          email: provider.email,//
           phoneNumber: provider.phoneNumber,
           rating: averageRating,
           totalJobs: totalJobs,

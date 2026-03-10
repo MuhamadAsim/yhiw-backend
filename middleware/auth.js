@@ -2,9 +2,9 @@
 import jwt from 'jsonwebtoken';
 
 export const authMiddleware = (req, res, next) => {
-  console.log('='.repeat(50));
-  console.log('🔐 AUTH MIDDLEWARE CALLED');
-  console.log('='.repeat(50));
+  // console.log('='.repeat(50));
+  // console.log('🔐 AUTH MIDDLEWARE CALLED');
+  // console.log('='.repeat(50));
   
   try {
     const authHeader = req.headers['authorization'];
@@ -42,17 +42,17 @@ export const authMiddleware = (req, res, next) => {
         });
       }
       
-      console.log('✅ Token verified successfully');
-      console.log('Decoded token:', JSON.stringify(decoded, null, 2));
+      // console.log('✅ Token verified successfully');
+      // console.log('Decoded token:', JSON.stringify(decoded, null, 2));
       
-      // Check what's in the decoded token
-      console.log('\n🔍 CHECKING FOR USER ID IN TOKEN:');
-      console.log('- decoded.id:', decoded.id);
-      console.log('- decoded._id:', decoded._id);
-      console.log('- decoded.userId:', decoded.userId);
-      console.log('- decoded.uid:', decoded.uid);
-      console.log('- decoded.sub:', decoded.sub);
-      console.log('- decoded.firebaseUserId:', decoded.firebaseUserId);
+      // // Check what's in the decoded token
+      // console.log('\n🔍 CHECKING FOR USER ID IN TOKEN:');
+      // console.log('- decoded.id:', decoded.id);
+      // console.log('- decoded._id:', decoded._id);
+      // console.log('- decoded.userId:', decoded.userId);
+      // console.log('- decoded.uid:', decoded.uid);
+      // console.log('- decoded.sub:', decoded.sub);
+      // console.log('- decoded.firebaseUserId:', decoded.firebaseUserId);
       
       // IMPORTANT: Extract the best available ID and make it available as req.user.id
       // This ensures your controller can always access req.user.id
@@ -61,22 +61,22 @@ export const authMiddleware = (req, res, next) => {
       // Try different possible ID fields in order of preference
       if (decoded.id) {
         userId = decoded.id;
-        console.log('✅ Using decoded.id as userId:', userId);
+        // console.log('✅ Using decoded.id as userId:', userId);
       } else if (decoded._id) {
         userId = decoded._id;
-        console.log('✅ Using decoded._id as userId:', userId);
+        // console.log('✅ Using decoded._id as userId:', userId);
       } else if (decoded.userId) {
         userId = decoded.userId;
-        console.log('✅ Using decoded.userId as userId:', userId);
+        // console.log('✅ Using decoded.userId as userId:', userId);
       } else if (decoded.uid) {
         userId = decoded.uid;
-        console.log('✅ Using decoded.uid as userId:', userId);
+        // console.log('✅ Using decoded.uid as userId:', userId);
       } else if (decoded.sub) {
         userId = decoded.sub;
-        console.log('✅ Using decoded.sub as userId:', userId);
+        // console.log('✅ Using decoded.sub as userId:', userId);
       } else if (decoded.firebaseUserId) {
         userId = decoded.firebaseUserId;
-        console.log('✅ Using decoded.firebaseUserId as userId:', userId);
+        // console.log('✅ Using decoded.firebaseUserId as userId:', userId);
       }
       
       // Set req.user with the extracted ID and all original data
@@ -88,7 +88,7 @@ export const authMiddleware = (req, res, next) => {
         uid: decoded.uid || userId,    // Keep uid if exists
       };
       
-      console.log('\n📦 FINAL req.user SET TO:');
+      // console.log('\n📦 FINAL req.user SET TO:');
       console.log(JSON.stringify({
         id: req.user.id,
         _id: req.user._id,
@@ -98,13 +98,13 @@ export const authMiddleware = (req, res, next) => {
         role: req.user.role
       }, null, 2));
       
-      if (!req.user.id) {
-        console.log('⚠️ WARNING: No user ID could be extracted from token!');
-      } else {
-        console.log('✅ User ID successfully set to:', req.user.id);
-      }
+      // if (!req.user.id) {
+      //   console.log('⚠️ WARNING: No user ID could be extracted from token!');
+      // } else {
+      //   console.log('✅ User ID successfully set to:', req.user.id);
+      // }
       
-      console.log('\n➡️ Calling next()...');
+      // console.log('\n➡️ Calling next()...');
       next();
     });
   } catch (error) {
