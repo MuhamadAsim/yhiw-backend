@@ -764,8 +764,6 @@ const getGoogleMapsDirections = async (originLat, originLng, destLat, destLng) =
 
 
 
-
-
 // GET /api/customer/:bookingId/route
 export const getRouteToPickup = async (req, res) => {
   try {
@@ -784,6 +782,7 @@ export const getRouteToPickup = async (req, res) => {
 
     if (!job) {
       return res.status(404).json({
+        success: false,
         error: 'Job not found',
         message: 'No active job found with this booking ID'
       });
@@ -793,7 +792,7 @@ export const getRouteToPickup = async (req, res) => {
     console.log(`✅ Provider ID: ${job.providerId}`);
 
     // Get provider details from database
-    const provider = await User.findById(job.providerId).select('name phone email profileImage');
+    const provider = await User.findById(job.providerId).select('fullName name phoneNumber email profileImage rating');
 
     if (!provider) {
       console.log(`⚠️ Provider not found in User collection: ${job.providerId}`);
@@ -806,6 +805,7 @@ export const getRouteToPickup = async (req, res) => {
     if (!providerStatus?.currentLocation?.coordinates) {
       console.log(`⚠️ Provider location not available`);
       return res.status(404).json({
+        success: false,
         error: 'Location not available',
         message: 'Provider location is not available yet'
       });
@@ -817,6 +817,7 @@ export const getRouteToPickup = async (req, res) => {
     if (!job.bookingData?.pickup?.coordinates) {
       console.log(`⚠️ Pickup location not available`);
       return res.status(404).json({
+        success: false,
         error: 'Pickup location not available',
         message: 'Pickup location coordinates are missing'
       });
@@ -827,8 +828,8 @@ export const getRouteToPickup = async (req, res) => {
 
     console.log(`📍 Provider: ${providerLat}, ${providerLng}`);
     console.log(`📍 Pickup: ${pickupLat}, ${pickupLng}`);
-    console.log(`👤 Provider Name: ${provider?.name || 'Unknown'}`);
-    console.log(`📞 Provider Phone: ${provider?.phone || 'Unknown'}`);
+    console.log(`👤 Provider Name: ${provider?.fullName || provider?.name || 'Unknown'}`);
+    console.log(`📞 Provider Phone: ${provider?.phoneNumber || provider?.phone || 'Unknown'}`);
 
     // USE GOOGLE MAPS API FOR ROUTE
     let routeData = null;
@@ -836,7 +837,7 @@ export const getRouteToPickup = async (req, res) => {
 
     try {
       // Call Google Maps Directions API
-      const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${providerLat},${providerLng}&destination=${pickupLat},${pickupLng}&key=${GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
+      const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${providerLat},${providerLng}&destination=${pickupLat},${pickupLng}&key=${process.env.GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
 
       console.log(`🔄 Calling Google Directions API...`);
       const directionsResponse = await axios.get(directionsUrl);
@@ -879,7 +880,7 @@ export const getRouteToPickup = async (req, res) => {
       );
 
       routeData = {
-        polyline: null,
+        polyline: `${providerLat},${providerLng}|${pickupLat},${pickupLng}`, // Simple polyline format
         distance: `${simpleDistance.toFixed(1)} km`,
         eta: `${Math.ceil(simpleDistance * 12)} min`,
         distanceValue: simpleDistance * 1000,
@@ -887,10 +888,12 @@ export const getRouteToPickup = async (req, res) => {
       };
     }
 
+    // Build the complete response
     const response = {
       success: true,
       usingFallback,
       route: {
+        // Provider location with all details
         providerLocation: {
           latitude: providerLat,
           longitude: providerLng,
@@ -898,21 +901,29 @@ export const getRouteToPickup = async (req, res) => {
           heading: providerStatus.heading || 0,
           speed: providerStatus.speed || 0
         },
-        providerId: job.providerId, // Add provider ID
-        providerName: provider?.name || 'Provider', // ✅ REAL provider name
-        providerPhone: provider?.phone || '', // ✅ REAL provider phone
-        providerRating: provider?.rating || 4.5, // If you have rating
-        providerImage: provider?.profileImage || null, // If you have profile images
+        // Provider info
+        providerId: job.providerId,
+        providerName: provider?.fullName || provider?.name || 'Provider',
+        providerPhone: provider?.phoneNumber || provider?.phone || '',
+        providerRating: provider?.rating || 4.5,
+        providerImage: provider?.profileImage || null,
+        
+        // Pickup location
         pickupLocation: {
           latitude: pickupLat,
           longitude: pickupLng,
           address: job.bookingData.pickup.address || 'Pickup location'
         },
+        
+        // Route data
         polyline: routeData.polyline,
         distance: routeData.distance,
         eta: routeData.eta,
         distanceValue: routeData.distanceValue,
-        etaValue: routeData.etaValue
+        etaValue: routeData.etaValue,
+        
+        // Optional step-by-step directions
+        steps: routeData.steps || []
       }
     };
 
@@ -925,11 +936,17 @@ export const getRouteToPickup = async (req, res) => {
       };
     }
 
+    console.log(`✅ Route response prepared with provider: ${response.route.providerName}`);
+    console.log(`🔵 ===== GET ROUTE COMPLETED =====\n`);
+
     return res.json(response);
 
   } catch (error) {
     console.error('❌ Get route error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
   }
 };
 
@@ -948,24 +965,31 @@ export const getLiveTracking = async (req, res) => {
     });
 
     if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
+      return res.status(404).json({ 
+        success: false,
+        error: 'Job not found' 
+      });
     }
 
     // Get provider details
-    const provider = await User.findById(job.providerId).select('name phone rating profileImage');
+    const provider = await User.findById(job.providerId).select('fullName name phoneNumber email profileImage rating');
 
     const providerStatus = await ProviderLiveStatus.findOne({
       providerId: job.providerId
     });
 
+    // If no provider location, return basic info
     if (!providerStatus?.currentLocation?.coordinates) {
       return res.json({
         success: true,
         location: null,
         message: 'Provider location not available yet',
-        providerName: provider?.name || 'Provider',
-        providerPhone: provider?.phone || '',
-        providerRating: provider?.rating || 4.5
+        status: job.status,
+        providerId: job.providerId,
+        providerName: provider?.fullName || provider?.name || 'Provider',
+        providerPhone: provider?.phoneNumber || provider?.phone || '',
+        providerRating: provider?.rating || 4.5,
+        providerImage: provider?.profileImage || null
       });
     }
 
@@ -977,13 +1001,14 @@ export const getLiveTracking = async (req, res) => {
     let etaValue = null;
     let distanceValue = null;
 
+    // Calculate ETA and distance if pickup coordinates exist
     if (job.bookingData?.pickup?.coordinates) {
       const pickupLat = job.bookingData.pickup.coordinates.lat;
       const pickupLng = job.bookingData.pickup.coordinates.lng;
 
       try {
-        // Use Google Maps Distance Matrix API for real-time ETA
-        const matrixUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLat},${providerLng}&destinations=${pickupLat},${pickupLng}&key=${GOOGLE_MAPS_API_KEY}&mode=driving&departure_time=now`;
+        // Use Google Maps Distance Matrix API for real-time ETA with traffic
+        const matrixUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLat},${providerLng}&destinations=${pickupLat},${pickupLng}&key=${process.env.GOOGLE_MAPS_API_KEY}&mode=driving&departure_time=now`;
 
         const matrixResponse = await axios.get(matrixUrl);
 
@@ -994,6 +1019,7 @@ export const getLiveTracking = async (req, res) => {
           distance = element.distance.text;
           distanceValue = element.distance.value;
 
+          // Use duration_in_traffic if available (real-time traffic)
           if (element.duration_in_traffic) {
             eta = element.duration_in_traffic.text;
             etaValue = element.duration_in_traffic.value;
@@ -1014,6 +1040,8 @@ export const getLiveTracking = async (req, res) => {
           eta = `${Math.ceil(simpleDistance * 12)} min`;
           distanceValue = simpleDistance * 1000;
           etaValue = Math.ceil(simpleDistance * 12 * 60);
+          
+          console.log(`⚠️ Using fallback ETA: ${eta}`);
         }
       } catch (matrixError) {
         console.error(`❌ Distance Matrix API error:`, matrixError.message);
@@ -1030,42 +1058,50 @@ export const getLiveTracking = async (req, res) => {
       }
     }
 
+    // Map job status to frontend-friendly status
     const statusMap = {
       'accepted': 'accepted',
       'in_progress': 'started',
       'completed': 'completed'
     };
 
-    res.json({
+    const response = {
       success: true,
-      location: {
+      location: providerStatus?.currentLocation?.coordinates ? {
         latitude: providerLat,
         longitude: providerLng,
         heading: providerStatus.heading || 0,
         speed: providerStatus.speed || 0,
         lastUpdate: providerStatus.currentLocation.lastUpdated || new Date()
-      },
+      } : null,
       status: statusMap[job.status] || job.status,
       eta,
       distance,
       etaValue,
       distanceValue,
       providerId: job.providerId,
-      providerName: provider?.name || 'Provider', // ✅ REAL provider name
-      providerPhone: provider?.phone || '', // ✅ REAL provider phone
+      providerName: provider?.fullName || provider?.name || 'Provider',
+      providerPhone: provider?.phoneNumber || provider?.phone || '',
       providerRating: provider?.rating || 4.5,
       providerImage: provider?.profileImage || null
-    });
+    };
+
+    console.log(`✅ Live tracking response sent - Status: ${response.status}, Provider: ${response.providerName}`);
+    
+    return res.json(response);
 
   } catch (error) {
     console.error('❌ Live tracking error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
   }
 };
 
 // Helper function for simple distance calculation (keep as fallback)
 function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
+  const R = 6371; // Earth's radius in km
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a =
