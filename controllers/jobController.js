@@ -726,17 +726,15 @@ export const getJobRating = async (req, res) => {
 
 
 
-
-
 // @desc    Get timer data for a job
 // @route   GET /api/provider/job/:bookingId/timer
 export const getJobTimer = async (req, res) => {
   try {
-    const { bookingId } = req.params; // Use bookingId consistently
+    const { bookingId } = req.params;
 
+    // Find job by bookingId only - no provider verification
     const job = await Job.findOne({ 
-      bookingId: bookingId, // Match with bookingId
-      providerId: req.user._id // Add provider verification
+      bookingId: bookingId
     });
 
     if (!job) {
@@ -750,7 +748,7 @@ export const getJobTimer = async (req, res) => {
       success: true,
       timer: {
         durationSeconds: job.timeTracking?.totalSeconds || 0,
-        paused: job.timeTracking?.isPaused || false,
+        isPaused: job.timeTracking?.isPaused || false, // Note: using isPaused consistently
         pausedAt: job.timeTracking?.pausedAt || null
       }
     });
@@ -771,10 +769,9 @@ export const updateJobTimer = async (req, res) => {
     const { bookingId } = req.params;
     const { durationSeconds, paused, action } = req.body;
 
-    // Find job and verify ownership
+    // Find job by bookingId only - no provider verification
     const job = await Job.findOne({ 
-      bookingId: bookingId,
-      providerId: req.user._id
+      bookingId: bookingId
     });
 
     if (!job) {
@@ -784,21 +781,26 @@ export const updateJobTimer = async (req, res) => {
       });
     }
 
+    // Initialize timeTracking if it doesn't exist
+    if (!job.timeTracking) {
+      job.timeTracking = {};
+    }
+
     // Update time tracking
-    job.timeTracking = {
-      ...job.timeTracking,
-      totalSeconds: durationSeconds,
-      isPaused: paused || false
-    };
+    job.timeTracking.totalSeconds = durationSeconds;
+    job.timeTracking.isPaused = paused || false;
 
     // Update pausedAt based on action
     if (action === 'pause') {
       job.timeTracking.pausedAt = new Date();
     } else if (action === 'resume') {
       job.timeTracking.pausedAt = null;
+    } else if (action === 'complete') {
+      // Just save the final time, no status change needed here
+      job.timeTracking.completedAt = new Date();
     }
 
-    // If starting the job
+    // If starting the job (first time)
     if (action === 'start' && job.status === 'accepted') {
       job.status = 'in_progress';
       job.startedAt = new Date();
