@@ -728,25 +728,21 @@ export const getJobRating = async (req, res) => {
 
 
 
-
-
 // @desc    Get timer data for a job
 // @route   GET /api/provider/job/:bookingId/timer
-// @access  Private (Provider only)
 export const getJobTimer = async (req, res) => {
   try {
-    const { bookingId } = req.params;
+    const { bookingId } = req.params; // Use bookingId consistently
 
-    // Find job and verify provider owns it
     const job = await Job.findOne({ 
-      bookingId: bookingId,
-      status: { $in: ['accepted', 'in_progress'] }
-    }).select('timeTracking status');
+      bookingId: bookingId, // Match with bookingId
+      providerId: req.user._id // Add provider verification
+    });
 
     if (!job) {
       return res.status(404).json({
         success: false,
-        message: 'Job not found or not accessible'
+        message: 'Job not found'
       });
     }
 
@@ -754,74 +750,61 @@ export const getJobTimer = async (req, res) => {
       success: true,
       timer: {
         durationSeconds: job.timeTracking?.totalSeconds || 0,
-        isPaused: job.timeTracking?.isPaused || false,
-        pausedAt: job.timeTracking?.pausedAt || null,
-        timeExtensions: job.timeTracking?.timeExtensions || []
-      },
-      status: job.status
+        paused: job.timeTracking?.isPaused || false,
+        pausedAt: job.timeTracking?.pausedAt || null
+      }
     });
 
   } catch (error) {
     console.error('Error fetching job timer:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to fetch timer data',
-      error: error.message
+      message: 'Failed to fetch timer data'
     });
   }
 };
 
 // @desc    Update timer data for a job
 // @route   PATCH /api/provider/:bookingId/timer
-// @access  Private (Provider only)
 export const updateJobTimer = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { durationSeconds, paused, action } = req.body;
 
-    // Validate required fields
-    if (durationSeconds === undefined) {
-      return res.status(400).json({
-        success: false,
-        message: 'durationSeconds is required'
-      });
-    }
-
-    // Build update object
-    const updateData = {
-      'timeTracking.totalSeconds': durationSeconds,
-      'timeTracking.isPaused': paused || false
-    };
-
-    // Update pausedAt based on action
-    if (action === 'pause') {
-      updateData['timeTracking.pausedAt'] = new Date();
-    } else if (action === 'resume') {
-      updateData['timeTracking.pausedAt'] = null;
-    }
-
-    // If action is 'start' and job is not yet in_progress, update status
-    if (action === 'start') {
-      updateData.status = 'in_progress';
-      updateData.startedAt = new Date();
-    }
-
-    // Find and update the job
-    const job = await Job.findOneAndUpdate(
-      { 
-        bookingId: bookingId,
-        status: { $in: ['accepted', 'in_progress'] }
-      },
-      { $set: updateData },
-      { new: true, runValidators: true }
-    ).select('timeTracking status');
+    // Find job and verify ownership
+    const job = await Job.findOne({ 
+      bookingId: bookingId,
+      providerId: req.user._id
+    });
 
     if (!job) {
       return res.status(404).json({
         success: false,
-        message: 'Job not found or not accessible'
+        message: 'Job not found'
       });
     }
+
+    // Update time tracking
+    job.timeTracking = {
+      ...job.timeTracking,
+      totalSeconds: durationSeconds,
+      isPaused: paused || false
+    };
+
+    // Update pausedAt based on action
+    if (action === 'pause') {
+      job.timeTracking.pausedAt = new Date();
+    } else if (action === 'resume') {
+      job.timeTracking.pausedAt = null;
+    }
+
+    // If starting the job
+    if (action === 'start' && job.status === 'accepted') {
+      job.status = 'in_progress';
+      job.startedAt = new Date();
+    }
+
+    await job.save();
 
     return res.status(200).json({
       success: true,
@@ -830,18 +813,14 @@ export const updateJobTimer = async (req, res) => {
         durationSeconds: job.timeTracking.totalSeconds,
         isPaused: job.timeTracking.isPaused,
         pausedAt: job.timeTracking.pausedAt
-      },
-      status: job.status
+      }
     });
 
   } catch (error) {
     console.error('Error updating job timer:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to update timer',
-      error: error.message
+      message: 'Failed to update timer'
     });
   }
 };
-
-
