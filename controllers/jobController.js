@@ -227,40 +227,238 @@ export const checkJobStatus = async (req, res) => {
 
 
 
+
+// // controllers/jobController.js
+// export const cancelJob = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const { bookingId } = req.params;
+//     const { reason } = req.body;
+
+//     console.log(`\n🔴 ===== CANCEL JOB STARTED =====`);
+//     console.log(`📦 Booking ID: ${bookingId}`);
+
+//     // Try to cancel notification first (atomic operation)
+//     const notification = await Notification.findOneAndUpdate(
+//       { bookingId, status: 'pending' },
+//       { 
+//         $set: { 
+//           status: 'cancelled', 
+//           cancelledAt: new Date(),
+//           cancellationReason: reason || 'cancelled_by_customer'
+//         } 
+//       },
+//       { session, new: true }
+//     );
+
+//     if (notification) {
+//       console.log(`✅ Notification cancelled successfully`);
+//       await session.commitTransaction();
+//       session.endSession();
+//       return res.json({
+//         success: true,
+//         message: 'Booking cancelled successfully'
+//       });
+//     }
+
+//     // If no notification, check for active job
+//     const job = await Job.findOne({ bookingId }).session(session);
+    
+//     if (!job) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(404).json({ error: 'Booking not found' });
+//     }
+
+//     // Check if job can be cancelled
+//     if (!['accepted', 'in_progress'].includes(job.status)) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({ 
+//         error: 'Cannot cancel',
+//         message: `Job cannot be cancelled in ${job.status} state`
+//       });
+//     }
+
+//     // Update job status
+//     job.status = 'cancelled';
+//     job.cancelledAt = new Date();
+//     job.cancellationReason = reason || 'cancelled_by_customer';
+//     await job.save({ session });
+
+//     // Update provider availability if exists
+//     if (job.providerId) {
+//       await ProviderLiveStatus.findOneAndUpdate(
+//         { providerId: job.providerId },
+//         {
+//           isAvailable: true,
+//           currentBookingId: null,
+//           currentJobStatus: null
+//         },
+//         { session }
+//       );
+//     }
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     res.json({
+//       success: true,
+//       message: 'Job cancelled successfully'
+//     });
+
+//   } catch (error) {
+//     await session.abortTransaction();
+//     session.endSession();
+//     console.error('Cancel job error:', error);
+//     res.status(500).json({ error: error.message });
+//   }
+// };
+
+
+
+
+
 // controllers/jobController.js
 export const cancelJob = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { bookingId } = req.params;
     const { reason } = req.body;
+    const userId = req.user.id; // Assuming auth middleware sets this
 
-    // Check if job already exists (accepted)
-    const job = await Job.findOne({ bookingId });
-    if (job) {
-      // Job already accepted - need different flow
-      return res.status(400).json({ 
-        error: 'Job already accepted',
-        message: 'Please cancel from the tracking screen'
+    console.log(`\n🔴 ===== CANCEL JOB STARTED =====`);
+    console.log(`📦 Booking ID: ${bookingId}`);
+    console.log(`👤 User ID: ${userId}`);
+    console.log(`📝 Reason: ${reason || 'No reason provided'}`);
+
+    // ✅ CHECK 1: First check if there's an active job (accepted/in_progress)
+    const activeJob = await Job.findOne({ 
+      bookingId,
+      status: { $in: ['accepted', 'in_progress'] }
+    }).session(session);
+
+    if (activeJob) {
+      console.log(`📋 Active job found with status: ${activeJob.status}`);
+      
+      // Verify this user owns the job (either as customer or provider)
+      if (activeJob.customerId.toString() !== userId && 
+          activeJob.providerId?.toString() !== userId) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(403).json({ 
+          error: 'Unauthorized',
+          message: 'You do not have permission to cancel this job'
+        });
+      }
+
+      // Update job status to cancelled
+      activeJob.status = 'cancelled';
+      activeJob.cancelledAt = new Date();
+      activeJob.cancellationReason = reason || 'cancelled_by_user';
+      activeJob.cancelledBy = userId;
+      await activeJob.save({ session });
+
+      // If there's a provider assigned, update their availability
+      if (activeJob.providerId) {
+        await ProviderLiveStatus.findOneAndUpdate(
+          { providerId: activeJob.providerId },
+          {
+            isAvailable: true,
+            currentBookingId: null,
+            currentJobStatus: null,
+            lastSeen: new Date()
+          },
+          { session }
+        );
+        console.log(`✅ Provider ${activeJob.providerId} marked as available`);
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.json({
+        success: true,
+        message: 'Job cancelled successfully',
+        data: {
+          bookingId,
+          status: 'cancelled',
+          cancelledAt: activeJob.cancelledAt
+        }
       });
     }
 
-    // Delete from notification (if exists)
-    const result = await Notification.deleteOne({ bookingId });
-    
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
+    // ✅ CHECK 2: Check for pending notification
+    const notification = await Notification.findOneAndUpdate(
+      { 
+        bookingId, 
+        status: 'pending' 
+      },
+      { 
+        $set: { 
+          status: 'cancelled',
+          cancelledAt: new Date(),
+          cancellationReason: reason || 'cancelled_by_customer'
+        } 
+      },
+      { 
+        new: true,
+        session 
+      }
+    );
+
+    if (!notification) {
+      // Double-check if job exists in any other state
+      const otherJob = await Job.findOne({ bookingId }).session(session);
+      
+      if (otherJob) {
+        // Job exists but in different state (completed, cancelled, etc)
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          error: 'Invalid job state',
+          message: `Cannot cancel job with status: ${otherJob.status}`
+        });
+      }
+
+      // No job and no notification found
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ 
+        error: 'Booking not found',
+        message: 'No booking found with this ID'
+      });
     }
+
+    console.log(`✅ Notification cancelled successfully`);
+
+    await session.commitTransaction();
+    session.endSession();
 
     res.json({
       success: true,
-      message: 'Booking cancelled successfully'
+      message: 'Booking cancelled successfully',
+      data: {
+        bookingId,
+        status: 'cancelled',
+        cancelledAt: new Date()
+      }
     });
 
   } catch (error) {
-    console.error('Cancel job error:', error);
-    res.status(500).json({ error: error.message });
+    await session.abortTransaction();
+    session.endSession();
+    console.error('❌ Cancel job error:', error);
+    res.status(500).json({ 
+      error: 'Failed to cancel job',
+      message: error.message 
+    });
   }
 };
-
 
 
 
@@ -531,5 +729,119 @@ export const getJobRating = async (req, res) => {
 
 
 
+
+// @desc    Get timer data for a job
+// @route   GET /api/provider/job/:bookingId/timer
+// @access  Private (Provider only)
+export const getJobTimer = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    // Find job and verify provider owns it
+    const job = await Job.findOne({ 
+      bookingId: bookingId,
+      status: { $in: ['accepted', 'in_progress'] }
+    }).select('timeTracking status');
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found or not accessible'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      timer: {
+        durationSeconds: job.timeTracking?.totalSeconds || 0,
+        isPaused: job.timeTracking?.isPaused || false,
+        pausedAt: job.timeTracking?.pausedAt || null,
+        timeExtensions: job.timeTracking?.timeExtensions || []
+      },
+      status: job.status
+    });
+
+  } catch (error) {
+    console.error('Error fetching job timer:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch timer data',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update timer data for a job
+// @route   PATCH /api/provider/:bookingId/timer
+// @access  Private (Provider only)
+export const updateJobTimer = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { durationSeconds, paused, action } = req.body;
+
+    // Validate required fields
+    if (durationSeconds === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'durationSeconds is required'
+      });
+    }
+
+    // Build update object
+    const updateData = {
+      'timeTracking.totalSeconds': durationSeconds,
+      'timeTracking.isPaused': paused || false
+    };
+
+    // Update pausedAt based on action
+    if (action === 'pause') {
+      updateData['timeTracking.pausedAt'] = new Date();
+    } else if (action === 'resume') {
+      updateData['timeTracking.pausedAt'] = null;
+    }
+
+    // If action is 'start' and job is not yet in_progress, update status
+    if (action === 'start') {
+      updateData.status = 'in_progress';
+      updateData.startedAt = new Date();
+    }
+
+    // Find and update the job
+    const job = await Job.findOneAndUpdate(
+      { 
+        bookingId: bookingId,
+        status: { $in: ['accepted', 'in_progress'] }
+      },
+      { $set: updateData },
+      { new: true, runValidators: true }
+    ).select('timeTracking status');
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found or not accessible'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Timer ${action} updated successfully`,
+      timer: {
+        durationSeconds: job.timeTracking.totalSeconds,
+        isPaused: job.timeTracking.isPaused,
+        pausedAt: job.timeTracking.pausedAt
+      },
+      status: job.status
+    });
+
+  } catch (error) {
+    console.error('Error updating job timer:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update timer',
+      error: error.message
+    });
+  }
+};
 
 

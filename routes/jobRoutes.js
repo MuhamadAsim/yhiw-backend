@@ -8,6 +8,8 @@ import {
   getJobDetails,
   rateCompletedJob,
   getJobRating,
+  getJobTimer,
+  updateJobTimer,
 } from '../controllers/jobController.js';
 
 const router = express.Router();
@@ -31,6 +33,13 @@ router.post('/:bookingId/rate', authMiddleware, rateCompletedJob);
 
 
 router.get('/:bookingId/rating', authMiddleware, getJobRating);
+
+
+// Get timer for a specific job
+router.get('/:bookingId/timer', getJobTimer);
+
+// Update timer (pause/resume/update)
+router.patch('/:bookingId/timer', updateJobTimer);
 
 
 

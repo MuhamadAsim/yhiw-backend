@@ -14,7 +14,7 @@ export const getSavedLocations = async (req, res) => {
     const { userId } = req.params;
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -51,7 +51,7 @@ export const saveLocation = async (req, res) => {
     }
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -109,7 +109,7 @@ export const updateLocation = async (req, res) => {
     const updates = req.body;
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -118,7 +118,7 @@ export const updateLocation = async (req, res) => {
     }
 
     const location = user.savedLocations.id(locationId);
-    
+
     if (!location) {
       return res.status(404).json({
         success: false,
@@ -155,7 +155,7 @@ export const deleteLocation = async (req, res) => {
     const { userId, locationId } = req.params;
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -190,7 +190,7 @@ export const addRecentLocation = async (req, res) => {
     const { title, address, latitude, longitude, placeId } = req.body;
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -238,7 +238,7 @@ export const getRecentLocations = async (req, res) => {
     const { userId } = req.params;
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -266,7 +266,7 @@ export const clearRecentLocations = async (req, res) => {
     const { userId } = req.params;
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -298,7 +298,7 @@ export const toggleFavoriteLocation = async (req, res) => {
     const { isFavorite } = req.body;
 
     const user = await User.findOne({ firebaseUserId: userId });
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -307,7 +307,7 @@ export const toggleFavoriteLocation = async (req, res) => {
     }
 
     const location = user.savedLocations.id(locationId);
-    
+
     if (!location) {
       return res.status(404).json({
         success: false,
@@ -334,7 +334,6 @@ export const toggleFavoriteLocation = async (req, res) => {
 };
 
 
-
 // ==================== JOB CONTROLLERS FOR CUSTOMER ====================
 
 // Get complete job details for customer
@@ -345,9 +344,9 @@ export const getCustomerJobDetails = async (req, res) => {
 
     console.log(`📋 Customer fetching job details: ${bookingId}`);
 
-    const job = await Job.findOne({ 
+    const job = await Job.findOne({
       bookingId,
-      customerId 
+      customerId
     }).populate('providerId', 'fullName phoneNumber profileImage rating completedJobs yearsOfExperience');
 
     if (!job) {
@@ -363,22 +362,22 @@ export const getCustomerJobDetails = async (req, res) => {
 
     let estimatedArrival = '15 min';
     let distance = '2.5 km';
-    
-    if (providerLocation?.currentLocation?.coordinates && 
-        job.bookingData?.pickup?.coordinates) {
-      
+
+    if (providerLocation?.currentLocation?.coordinates &&
+      job.bookingData?.pickup?.coordinates) {
+
       const providerLat = providerLocation.currentLocation.coordinates[1];
       const providerLng = providerLocation.currentLocation.coordinates[0];
       const pickupLat = job.bookingData.pickup.coordinates.lat;
       const pickupLng = job.bookingData.pickup.coordinates.lng;
-      
+
       try {
         const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
         const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLat},${providerLng}&destinations=${pickupLat},${pickupLng}&key=${googleMapsApiKey}`;
-        
+
         const response = await fetch(url);
         const data = await response.json();
-        
+
         if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
           estimatedArrival = data.rows[0].elements[0].duration.text;
           distance = data.rows[0].elements[0].distance.text;
@@ -387,7 +386,7 @@ export const getCustomerJobDetails = async (req, res) => {
       } catch (mapsError) {
         console.error('Google Maps API error:', mapsError);
         const simpleDistance = calculateSimpleDistance(
-          providerLat, providerLng, 
+          providerLat, providerLng,
           pickupLat, pickupLng
         );
         distance = `${simpleDistance.toFixed(1)} km`;
@@ -401,9 +400,22 @@ export const getCustomerJobDetails = async (req, res) => {
         'in_progress': 'started',
         'completed': 'completed',
         'cancelled': 'cancelled',
-        'completed_conformed':'completed_conformed',
+        'completed_conformed': 'completed_conformed',
       };
       return statusMap[dbStatus] || dbStatus;
+    };
+
+    // Format duration from timeTracking if available
+    const formatDuration = (totalSeconds) => {
+      if (!totalSeconds || totalSeconds === 0) return '35 minutes';
+
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+      if (hours > 0) {
+        return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''}`;
+      }
+      return `${minutes} minute${minutes > 1 ? 's' : ''}`;
     };
 
     const jobDetails = {
@@ -412,17 +424,17 @@ export const getCustomerJobDetails = async (req, res) => {
       serviceType: job.bookingData?.serviceCategory || '',
       serviceName: job.bookingData?.serviceName || '',
       vehicleType: job.bookingData?.vehicle?.type || '',
-      
+
       pickup: {
         address: job.bookingData?.pickup?.address || '',
         coordinates: job.bookingData?.pickup?.coordinates || { lat: 0, lng: 0 }
       },
-      
+
       dropoff: job.bookingData?.dropoff ? {
         address: job.bookingData.dropoff.address,
         coordinates: job.bookingData.dropoff.coordinates
       } : undefined,
-      
+
       provider: job.providerId ? {
         id: job.providerId._id,
         name: job.providerId.fullName || 'Provider',
@@ -439,24 +451,53 @@ export const getCustomerJobDetails = async (req, res) => {
           description: `${job.bookingData?.vehicle?.color || 'White'} ${job.bookingData?.vehicle?.makeModel || 'Service Vehicle'}`
         }
       } : null,
-      
+
       providerLocation: providerLocation?.currentLocation ? {
         latitude: providerLocation.currentLocation.coordinates[1],
         longitude: providerLocation.currentLocation.coordinates[0],
         heading: providerLocation.heading || 0,
         updatedAt: providerLocation.currentLocation.lastUpdated
       } : null,
-      
+
+      // ⭐ TIMER DATA - Added for the completion screen
+      timeTracking: {
+        totalSeconds: job.timeTracking?.totalSeconds || 0,
+        isPaused: job.timeTracking?.isPaused || false,
+        pausedAt: job.timeTracking?.pausedAt || null,
+        timeExtensions: job.timeTracking?.timeExtensions || [],
+        startedAt: job.timeTracking?.startedAt || null,
+        completedAt: job.timeTracking?.completedAt || null
+      },
+
+      // ⭐ Timeline data for completion time
+      timeline: {
+        acceptedAt: job.acceptedAt || null,
+        startedAt: job.startedAt || null,
+        completedAt: job.completedAt || null,
+        cancelledAt: job.cancelledAt || null
+      },
+
       payment: {
         totalAmount: job.bookingData?.payment?.totalAmount || 0,
         baseFee: job.bookingData?.payment?.baseServiceFee || 0,
         tip: job.bookingData?.payment?.selectedTip || 0
       },
-      
+
+      // ⭐ Formatted duration for convenience
+      formattedDuration: formatDuration(job.timeTracking?.totalSeconds),
+
       estimatedArrival: estimatedArrival,
       distance: distance,
       createdAt: job.acceptedAt || job.createdAt
     };
+
+    // Log to verify timer data is included
+    console.log('✅ Job details fetched with timer:', {
+      bookingId: job.bookingId,
+      totalSeconds: job.timeTracking?.totalSeconds,
+      formatted: formatDuration(job.timeTracking?.totalSeconds),
+      completedAt: job.completedAt
+    });
 
     res.json({
       success: true,
@@ -471,7 +512,6 @@ export const getCustomerJobDetails = async (req, res) => {
 
 
 
-
 // Get provider's real-time location
 export const getProviderLocationForCustomer = async (req, res) => {
   try {
@@ -479,7 +519,7 @@ export const getProviderLocationForCustomer = async (req, res) => {
     const customerId = req.user.id;
 
     const job = await Job.findOne({ bookingId, customerId });
-    
+
     if (!job || !job.providerId) {
       return res.status(404).json({
         success: false,
@@ -505,13 +545,13 @@ export const getProviderLocationForCustomer = async (req, res) => {
         const providerLng = providerLocation.currentLocation.coordinates[0];
         const pickupLat = job.bookingData.pickup.coordinates.lat;
         const pickupLng = job.bookingData.pickup.coordinates.lng;
-        
+
         const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
         const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLat},${providerLng}&destinations=${pickupLat},${pickupLng}&key=${googleMapsApiKey}`;
-        
+
         const response = await fetch(url);
         const data = await response.json();
-        
+
         if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
           eta = {
             text: data.rows[0].elements[0].duration.text,
@@ -531,7 +571,7 @@ export const getProviderLocationForCustomer = async (req, res) => {
         longitude: providerLocation.currentLocation.coordinates[0],
         heading: providerLocation.heading || 0,
         updatedAt: providerLocation.currentLocation.lastUpdated,
-        eta: eta 
+        eta: eta
       }
     });
 
@@ -635,12 +675,12 @@ const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => 
   try {
     const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
     const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${GOOGLE_MAPS_API_KEY}`;
-    
+
     console.log(`🌐 Calling Google Maps API: ${url}`);
-    
+
     const response = await fetch(url);
     const data = await response.json();
-    
+
     if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
       return {
         distance: data.rows[0].elements[0].distance.text,
@@ -649,7 +689,7 @@ const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => 
         durationValue: data.rows[0].elements[0].duration.value
       };
     }
-    
+
     console.warn('⚠️ Google Maps API returned non-OK status:', data.status);
     return null;
   } catch (error) {
@@ -662,16 +702,16 @@ const getGoogleMapsDirections = async (originLat, originLng, destLat, destLng) =
   try {
     const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
     const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&key=${GOOGLE_MAPS_API_KEY}`;
-    
+
     console.log(`🌐 Getting directions from Google Maps`);
-    
+
     const response = await fetch(url);
     const data = await response.json();
-    
+
     if (data.status === 'OK' && data.routes.length > 0) {
       const route = data.routes[0];
       const leg = route.legs[0];
-      
+
       return {
         polyline: route.overview_polyline.points,
         distance: leg.distance.text,
@@ -689,7 +729,7 @@ const getGoogleMapsDirections = async (originLat, originLng, destLat, destLng) =
         endAddress: leg.end_address
       };
     }
-    
+
     console.warn('⚠️ Directions API returned non-OK status:', data.status);
     return null;
   } catch (error) {
@@ -736,14 +776,14 @@ export const getRouteToPickup = async (req, res) => {
     console.log(`📦 Booking ID: ${bookingId}`);
 
     // Find the job
-    const job = await Job.findOne({ 
+    const job = await Job.findOne({
       bookingId,
       customerId,
       status: { $in: ['accepted', 'in_progress'] }
     });
 
     if (!job) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: 'Job not found',
         message: 'No active job found with this booking ID'
       });
@@ -754,13 +794,13 @@ export const getRouteToPickup = async (req, res) => {
 
     // Get provider details from database
     const provider = await User.findById(job.providerId).select('name phone email profileImage');
-    
+
     if (!provider) {
       console.log(`⚠️ Provider not found in User collection: ${job.providerId}`);
     }
 
-    const providerStatus = await ProviderLiveStatus.findOne({ 
-      providerId: job.providerId 
+    const providerStatus = await ProviderLiveStatus.findOne({
+      providerId: job.providerId
     });
 
     if (!providerStatus?.currentLocation?.coordinates) {
@@ -797,14 +837,14 @@ export const getRouteToPickup = async (req, res) => {
     try {
       // Call Google Maps Directions API
       const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${providerLat},${providerLng}&destination=${pickupLat},${pickupLng}&key=${GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
-      
+
       console.log(`🔄 Calling Google Directions API...`);
       const directionsResponse = await axios.get(directionsUrl);
-      
+
       if (directionsResponse.data.status === 'OK' && directionsResponse.data.routes.length > 0) {
         const route = directionsResponse.data.routes[0];
         const leg = route.legs[0];
-        
+
         routeData = {
           polyline: route.overview_polyline.points,
           distance: leg.distance.text,
@@ -819,7 +859,7 @@ export const getRouteToPickup = async (req, res) => {
             duration: step.duration.text
           }))
         };
-        
+
         console.log(`✅ Route found: ${routeData.distance}, ${routeData.eta}`);
       } else {
         console.log(`⚠️ Google Directions API error: ${directionsResponse.data.status}`);
@@ -837,7 +877,7 @@ export const getRouteToPickup = async (req, res) => {
         providerLat, providerLng,
         pickupLat, pickupLng
       );
-      
+
       routeData = {
         polyline: null,
         distance: `${simpleDistance.toFixed(1)} km`,
@@ -901,7 +941,7 @@ export const getLiveTracking = async (req, res) => {
 
     console.log(`📍 Getting live tracking for booking: ${bookingId}`);
 
-    const job = await Job.findOne({ 
+    const job = await Job.findOne({
       bookingId,
       customerId,
       status: { $in: ['accepted', 'in_progress', 'completed'] }
@@ -914,8 +954,8 @@ export const getLiveTracking = async (req, res) => {
     // Get provider details
     const provider = await User.findById(job.providerId).select('name phone rating profileImage');
 
-    const providerStatus = await ProviderLiveStatus.findOne({ 
-      providerId: job.providerId 
+    const providerStatus = await ProviderLiveStatus.findOne({
+      providerId: job.providerId
     });
 
     if (!providerStatus?.currentLocation?.coordinates) {
@@ -936,24 +976,24 @@ export const getLiveTracking = async (req, res) => {
     let distance = null;
     let etaValue = null;
     let distanceValue = null;
-    
+
     if (job.bookingData?.pickup?.coordinates) {
       const pickupLat = job.bookingData.pickup.coordinates.lat;
       const pickupLng = job.bookingData.pickup.coordinates.lng;
-      
+
       try {
         // Use Google Maps Distance Matrix API for real-time ETA
         const matrixUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${providerLat},${providerLng}&destinations=${pickupLat},${pickupLng}&key=${GOOGLE_MAPS_API_KEY}&mode=driving&departure_time=now`;
-        
+
         const matrixResponse = await axios.get(matrixUrl);
-        
-        if (matrixResponse.data.status === 'OK' && 
-            matrixResponse.data.rows[0]?.elements[0]?.status === 'OK') {
+
+        if (matrixResponse.data.status === 'OK' &&
+          matrixResponse.data.rows[0]?.elements[0]?.status === 'OK') {
           const element = matrixResponse.data.rows[0].elements[0];
-          
+
           distance = element.distance.text;
           distanceValue = element.distance.value;
-          
+
           if (element.duration_in_traffic) {
             eta = element.duration_in_traffic.text;
             etaValue = element.duration_in_traffic.value;
@@ -961,7 +1001,7 @@ export const getLiveTracking = async (req, res) => {
             eta = element.duration.text;
             etaValue = element.duration.value;
           }
-          
+
           console.log(`✅ Live ETA updated: ${eta} (${distance})`);
         } else {
           // Fallback to simple calculation
@@ -969,7 +1009,7 @@ export const getLiveTracking = async (req, res) => {
             providerLat, providerLng,
             pickupLat, pickupLng
           );
-          
+
           distance = `${simpleDistance.toFixed(1)} km`;
           eta = `${Math.ceil(simpleDistance * 12)} min`;
           distanceValue = simpleDistance * 1000;
@@ -982,7 +1022,7 @@ export const getLiveTracking = async (req, res) => {
           providerLat, providerLng,
           pickupLat, pickupLng
         );
-        
+
         distance = `${simpleDistance.toFixed(1)} km`;
         eta = `${Math.ceil(simpleDistance * 12)} min`;
         distanceValue = simpleDistance * 1000;
@@ -1028,11 +1068,11 @@ function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 
@@ -1066,9 +1106,9 @@ export const getCustomerJobDetailServiceInprogress = async (req, res) => {
     console.log(`👤 Customer ID: ${customerId}`);
 
     // Find the job and populate provider details
-    const job = await Job.findOne({ 
-      bookingId, 
-      customerId 
+    const job = await Job.findOne({
+      bookingId,
+      customerId
     }).populate({
       path: 'providerId',
       select: 'fullName phoneNumber email profileImage rating totalJobsCompleted serviceType description'
@@ -1104,7 +1144,7 @@ export const getCustomerJobDetailServiceInprogress = async (req, res) => {
           providerLat, providerLng,
           pickupLat, pickupLng
         );
-        
+
         if (mapsData) {
           distance = mapsData.distance;
           estimatedArrival = mapsData.duration;
