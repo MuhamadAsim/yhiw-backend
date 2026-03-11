@@ -5,7 +5,7 @@ import { printAllUsers } from "./controllers/userAuthController.js";
 
 dotenv.config();
 
-const PORT = process.env.PORT || 5000;
+const PORT = 4000;
 
 /* -------------------- Start Server -------------------- */
 const startServer = async () => {
