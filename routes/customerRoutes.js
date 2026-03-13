@@ -54,8 +54,8 @@ router.get('/:bookingId/status', getJobStatusForCustomer);
 // Cancel job from customer side (after provider accepted)
 router.post('/job/cancel/:bookingId', customerCancelJob);
 
-router.get('/:bookingId/route', authMiddleware, getRouteToPickup);
-router.get('/:bookingId/live-tracking', authMiddleware, getLiveTracking);
+router.get('/:bookingId/route',  getRouteToPickup);
+router.get('/:bookingId/live-tracking',  getLiveTracking);
 
 
 export default router;

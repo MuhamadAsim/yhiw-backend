@@ -3,7 +3,7 @@ import Notification from '../models/notificationModel.js';
 import Job from '../models/jobModel.js';
 import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
 import User from '../models/userModel.js';
-
+import mongoose from 'mongoose';
 
 
 export const createJobNotification = async (req, res) => {
@@ -732,10 +732,8 @@ export const getJobTimer = async (req, res) => {
   try {
     const { bookingId } = req.params;
 
-    // Find job by bookingId only - no provider verification
-    const job = await Job.findOne({ 
-      bookingId: bookingId
-    });
+    // Find job by bookingId only
+    const job = await Job.findOne({ bookingId: bookingId });
 
     if (!job) {
       return res.status(404).json({
@@ -748,7 +746,7 @@ export const getJobTimer = async (req, res) => {
       success: true,
       timer: {
         durationSeconds: job.timeTracking?.totalSeconds || 0,
-        isPaused: job.timeTracking?.isPaused || false, // Note: using isPaused consistently
+        isPaused: job.timeTracking?.isPaused || false,
         pausedAt: job.timeTracking?.pausedAt || null
       }
     });
@@ -769,10 +767,8 @@ export const updateJobTimer = async (req, res) => {
     const { bookingId } = req.params;
     const { durationSeconds, paused, action } = req.body;
 
-    // Find job by bookingId only - no provider verification
-    const job = await Job.findOne({ 
-      bookingId: bookingId
-    });
+    // Find job by bookingId only
+    const job = await Job.findOne({ bookingId: bookingId });
 
     if (!job) {
       return res.status(404).json({
@@ -783,7 +779,11 @@ export const updateJobTimer = async (req, res) => {
 
     // Initialize timeTracking if it doesn't exist
     if (!job.timeTracking) {
-      job.timeTracking = {};
+      job.timeTracking = {
+        totalSeconds: 0,
+        isPaused: false,
+        timeExtensions: []
+      };
     }
 
     // Update time tracking
@@ -796,8 +796,8 @@ export const updateJobTimer = async (req, res) => {
     } else if (action === 'resume') {
       job.timeTracking.pausedAt = null;
     } else if (action === 'complete') {
-      // Just save the final time, no status change needed here
-      job.timeTracking.completedAt = new Date();
+      job.timeTracking.pausedAt = null;
+      // Don't change job status here - that's handled separately
     }
 
     // If starting the job (first time)
