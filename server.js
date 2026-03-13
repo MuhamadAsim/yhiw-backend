@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import app from "./app.js";
 import connectDB from "./config/db.js";
-// import { printAllUsers } from "./controllers/userAuthController.js";
+import { printAllUsers } from "./controllers/userAuthController.js";
 
 dotenv.config();
 
@@ -10,7 +10,7 @@ const PORT = 4000;
 /* -------------------- Start Server -------------------- */
 const startServer = async () => {
   await connectDB();
-  // await printAllUsers(); 
+  await printAllUsers(); 
 
   app.listen(PORT, () => {
     console.log(`🚀 HTTP Server running on http://localhost:${PORT}`);

@@ -323,70 +323,88 @@ export const deleteAllUsers = async () => {
 
 
 
+/**
+ * @desc    Print all jobs with their status (for debugging)
+ * @route   GET /api/jobs/print-all
+ * @access  Private/Admin only
+ */
+export const printAllUsers = async () => {
+  try {
 
+    const countBefore = await Job.countDocuments();
 
-// /**
-//  * @desc    Delete all jobs from the Job model (for cleanup/debugging)
-//  * @route   DELETE /api/jobs/delete-all
-//  * @access  Private/Admin only
-//  */
-// export const printAllUsers = async () => {
-//   try {
+    console.log('\n========== PRINTING ALL JOBS ==========');
+    console.log(`📊 Total jobs found in Job model: ${countBefore}`);
+    console.log('=========================================\n');
 
-//     const countBefore = await Job.countDocuments();
+    if (countBefore === 0) {
+      console.log('No jobs found in Job model');
+      return {
+        success: true,
+        message: 'No jobs found',
+        totalJobs: 0
+      };
+    }
 
-//     console.log('\n========== DELETING ALL JOBS ==========');
-//     console.log(`📊 Jobs found in Job model before deletion: ${countBefore}`);
-//     console.log('=========================================\n');
+    // Fetch all jobs with selected fields
+    const jobs = await Job.find({}, { 
+      status: 1, 
+      serviceType: 1,
+      createdAt: 1,
+      customerName: 1 
+    }).sort({ createdAt: -1 }); // Sort by newest first
 
-//     if (countBefore === 0) {
-//       console.log('No jobs found in Job model to delete');
-//       return {
-//         success: true,
-//         message: 'No jobs found to delete',
-//         deletedCount: 0
-//       };
-//     }
+    console.log('\n📋 Job Status List:\n');
 
-//     // Fetch all jobs to print their status
-//     const jobs = await Job.find({}, { status: 1 });
+    jobs.forEach((job, index) => {
+      const createdAt = job.createdAt ? new Date(job.createdAt).toLocaleString() : 'N/A';
+      console.log(`${index + 1}. Job ID: ${job._id}`);
+      console.log(`   Status: ${job.status}`);
+      console.log(`   Service: ${job.serviceType || 'N/A'}`);
+      console.log(`   Customer: ${job.customerName || 'N/A'}`);
+      console.log(`   Created: ${createdAt}`);
+      console.log('   --------------------');
+    });
 
-//     console.log('\n📋 Job Status Before Deletion:\n');
+    console.log('\n📊 Summary:');
+    console.log(`   Total Jobs: ${jobs.length}`);
 
-//     jobs.forEach((job, index) => {
-//       console.log(`${index + 1}. Job ID: ${job._id} | Status: ${job.status}`);
-//     });
+    // Count by status
+    const statusCounts = {};
+    jobs.forEach(job => {
+      const status = job.status || 'unknown';
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+    });
 
-//     console.log('\n=========================================\n');
+    console.log('\n📈 Jobs by Status:');
+    Object.entries(statusCounts).forEach(([status, count]) => {
+      console.log(`   ${status}: ${count}`);
+    });
 
-//     // Delete all jobs
-//     // const result = await Job.deleteMany({});
+    console.log('\n=========================================\n');
 
-//     console.log(`✅ Deleted ${result.deletedCount} jobs from Job model`);
-//     console.log('=========================================\n');
+    return {
+      success: true,
+      message: `Successfully printed ${jobs.length} jobs`,
+      totalJobs: jobs.length,
+      jobs: jobs.map(j => ({
+        id: j._id,
+        status: j.status,
+        serviceType: j.serviceType,
+        customerName: j.customerName,
+        createdAt: j.createdAt
+      }))
+    };
 
-//     // Verify deletion
-//     const countAfter = await Job.countDocuments();
-//     console.log(`📊 Jobs after deletion: ${countAfter}`);
-
-//     return {
-//       success: true,
-//       message: `Successfully deleted ${result.deletedCount} jobs from Job model`,
-//       deletedCount: result.deletedCount
-//     };
-
-//   } catch (error) {
-//     console.error('Delete All Jobs Error:', error);
-//     return {
-//       success: false,
-//       message: 'Server error deleting jobs',
-//       error: error.message
-//     };
-//   }
-// };
-
-
-
+  } catch (error) {
+    console.error('Print All Jobs Error:', error);
+    return {
+      success: false,
+      message: 'Server error printing jobs',
+      error: error.message
+    };
+  }
+};
 
 
 
