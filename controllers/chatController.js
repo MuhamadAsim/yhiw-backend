@@ -428,3 +428,72 @@ export const getUnreadCount = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+
+
+
+
+
+
+// Most efficient - uses MongoDB aggregation to just get the count
+export const hasAnyMessage = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const userId = req.user?.id;
+
+    if (!bookingId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Booking ID is required',
+      });
+    }
+
+    // Use aggregation to get just the message count
+    const result = await Chat.aggregate([
+      { $match: { bookingId: bookingId } },
+      { $project: { 
+          messageCount: { $size: "$messages" },
+          customerId: 1,
+          providerId: 1
+        } 
+      }
+    ]);
+
+    // If no chat found
+    if (result.length === 0) {
+      return res.json({
+        success: true,
+        hasAnyMessage: false,
+        bookingId: bookingId,
+      });
+    }
+
+    const chat = result[0];
+
+    // Verify user has access
+    if (chat.customerId !== userId && chat.providerId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized to access this chat',
+      });
+    }
+
+    return res.json({
+      success: true,
+      hasAnyMessage: chat.messageCount > 0,
+      bookingId: bookingId,
+    });
+
+  } catch (error) {
+    console.error('Error checking messages:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to check messages',
+      error: error.message,
+    });
+  }
+};
