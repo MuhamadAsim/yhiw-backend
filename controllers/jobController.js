@@ -236,146 +236,218 @@ export const checkJobStatus = async (req, res) => {
 
 
 
-
 // controllers/jobController.js
 export const cancelJob = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { bookingId } = req.params;
-    const { reason } = req.body;
-    const userId = req.user.id; // Assuming auth middleware sets this
-
-    console.log(`\n🔴 ===== CANCEL JOB STARTED =====`);
-    console.log(`📦 Booking ID: ${bookingId}`);
-    console.log(`👤 User ID: ${userId}`);
-    console.log(`📝 Reason: ${reason || 'No reason provided'}`);
-
-    // ✅ CHECK 1: First check if there's an active job (accepted/in_progress)
-    const activeJob = await Job.findOne({ 
-      bookingId,
-      status: { $in: ['accepted', 'in_progress'] }
-    }).session(session);
-
-    if (activeJob) {
-      console.log(`📋 Active job found with status: ${activeJob.status}`);
+  const maxRetries = 3;
+  let retryCount = 0;
+  
+  while (retryCount < maxRetries) {
+    const session = await mongoose.startSession();
+    
+    try {
+      session.startTransaction();
       
-      // Verify this user owns the job (either as customer or provider)
-      if (activeJob.customerId.toString() !== userId && 
-          activeJob.providerId?.toString() !== userId) {
-        await session.abortTransaction();
+      const { bookingId } = req.params;
+      const { reason } = req.body;
+      const userId = req.user.id;
+
+      console.log(`\n🔴 ===== CANCEL JOB STARTED (Attempt ${retryCount + 1}/${maxRetries}) =====`);
+      console.log(`📦 Booking ID: ${bookingId}`);
+      console.log(`👤 User ID: ${userId}`);
+
+      // Use findOneAndUpdate with optimistic concurrency control
+      const activeJob = await Job.findOneAndUpdate(
+        { 
+          bookingId,
+          status: { $in: ['accepted', 'in_progress'] },
+          // Add version check if you have version field (__v)
+          ...(retryCount > 0 && { __v: currentVersion }) // If you track versions
+        },
+        {
+          $set: {
+            status: 'cancelled',
+            cancelledAt: new Date(),
+            cancellationReason: reason || 'cancelled_by_user',
+            cancelledBy: userId
+          }
+        },
+        { 
+          new: true,
+          session,
+          runValidators: true
+        }
+      ).session(session);
+
+      if (activeJob) {
+        // Verify ownership
+        if (activeJob.customerId.toString() !== userId && 
+            activeJob.providerId?.toString() !== userId) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(403).json({ 
+            error: 'Unauthorized',
+            message: 'You do not have permission to cancel this job'
+          });
+        }
+
+        // Update provider availability with retry logic
+        if (activeJob.providerId) {
+          const providerUpdate = await ProviderLiveStatus.findOneAndUpdate(
+            { providerId: activeJob.providerId },
+            {
+              isAvailable: true,
+              currentBookingId: null,
+              currentJobStatus: null,
+              lastSeen: new Date()
+            },
+            { 
+              session,
+              new: true // Return updated document
+            }
+          );
+
+          if (!providerUpdate) {
+            console.log(`⚠️ Provider ${activeJob.providerId} not found in live status, creating entry`);
+            await ProviderLiveStatus.create([{
+              providerId: activeJob.providerId,
+              isAvailable: true,
+              currentBookingId: null,
+              currentJobStatus: null,
+              lastSeen: new Date()
+            }], { session });
+          }
+          
+          console.log(`✅ Provider ${activeJob.providerId} marked as available`);
+        }
+
+        await session.commitTransaction();
         session.endSession();
-        return res.status(403).json({ 
-          error: 'Unauthorized',
-          message: 'You do not have permission to cancel this job'
+
+        return res.json({
+          success: true,
+          message: 'Job cancelled successfully',
+          data: {
+            bookingId,
+            status: 'cancelled',
+            cancelledAt: activeJob.cancelledAt
+          }
         });
       }
 
-      // Update job status to cancelled
-      activeJob.status = 'cancelled';
-      activeJob.cancelledAt = new Date();
-      activeJob.cancellationReason = reason || 'cancelled_by_user';
-      activeJob.cancelledBy = userId;
-      await activeJob.save({ session });
+      // Check for pending notification with atomic update
+      const notification = await Notification.findOneAndUpdate(
+        { 
+          bookingId, 
+          status: 'pending',
+          // Ensure we only cancel if still pending
+          $or: [
+            { expiresAt: { $gt: new Date() } },
+            { expiresAt: { $exists: false } }
+          ]
+        },
+        { 
+          $set: { 
+            status: 'cancelled',
+            cancelledAt: new Date(),
+            cancellationReason: reason || 'cancelled_by_customer'
+          } 
+        },
+        { 
+          new: true,
+          session,
+          runValidators: true
+        }
+    );
 
-      // If there's a provider assigned, update their availability
-      if (activeJob.providerId) {
-        await ProviderLiveStatus.findOneAndUpdate(
-          { providerId: activeJob.providerId },
-          {
-            isAvailable: true,
-            currentBookingId: null,
-            currentJobStatus: null,
-            lastSeen: new Date()
-          },
-          { session }
-        );
-        console.log(`✅ Provider ${activeJob.providerId} marked as available`);
+      if (!notification) {
+        // Check if job exists in terminal state
+        const existingJob = await Job.findOne({ 
+          bookingId,
+          status: { $in: ['completed', 'cancelled', 'expired'] }
+        }).session(session);
+
+        if (existingJob) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({
+            error: 'Invalid job state',
+            message: `Cannot cancel job with status: ${existingJob.status}`
+          });
+        }
+
+        // Check if this is a race condition (notification being processed)
+        const processingNotification = await Notification.findOne({
+          bookingId,
+          status: { $in: ['accepted', 'processing'] }
+        }).session(session);
+
+        if (processingNotification) {
+          // Race condition detected, retry
+          console.log('⚠️ Race condition detected, retrying...');
+          await session.abortTransaction();
+          session.endSession();
+          retryCount++;
+          continue;
+        }
+
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ 
+          error: 'Booking not found',
+          message: 'No active booking found with this ID'
+        });
       }
+
+      console.log(`✅ Notification cancelled successfully`);
 
       await session.commitTransaction();
       session.endSession();
 
       return res.json({
         success: true,
-        message: 'Job cancelled successfully',
+        message: 'Booking cancelled successfully',
         data: {
           bookingId,
           status: 'cancelled',
-          cancelledAt: activeJob.cancelledAt
+          cancelledAt: new Date()
         }
       });
-    }
 
-    // ✅ CHECK 2: Check for pending notification
-    const notification = await Notification.findOneAndUpdate(
-      { 
-        bookingId, 
-        status: 'pending' 
-      },
-      { 
-        $set: { 
-          status: 'cancelled',
-          cancelledAt: new Date(),
-          cancellationReason: reason || 'cancelled_by_customer'
-        } 
-      },
-      { 
-        new: true,
-        session 
-      }
-    );
-
-    if (!notification) {
-      // Double-check if job exists in any other state
-      const otherJob = await Job.findOne({ bookingId }).session(session);
-      
-      if (otherJob) {
-        // Job exists but in different state (completed, cancelled, etc)
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          error: 'Invalid job state',
-          message: `Cannot cancel job with status: ${otherJob.status}`
-        });
-      }
-
-      // No job and no notification found
+    } catch (error) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ 
-        error: 'Booking not found',
-        message: 'No booking found with this ID'
+      
+      // Check for write conflict error
+      if (error.code === 112 || // Write conflict
+          error.codeName === 'WriteConflict' ||
+          error.message.includes('WriteConflict')) {
+        
+        console.log(`⚠️ Write conflict detected, retry ${retryCount + 1}/${maxRetries}`);
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 100));
+          continue;
+        }
+      }
+      
+      console.error('❌ Cancel job error:', error);
+      
+      // Don't show raw error to customer
+      return res.status(500).json({ 
+        error: 'Unable to cancel booking',
+        message: 'Please try again in a few moments'
       });
     }
-
-    console.log(`✅ Notification cancelled successfully`);
-
-    await session.commitTransaction();
-    session.endSession();
-
-    res.json({
-      success: true,
-      message: 'Booking cancelled successfully',
-      data: {
-        bookingId,
-        status: 'cancelled',
-        cancelledAt: new Date()
-      }
-    });
-
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error('❌ Cancel job error:', error);
-    res.status(500).json({ 
-      error: 'Failed to cancel job',
-      message: error.message 
-    });
   }
-};
 
+  // Max retries exceeded
+  return res.status(503).json({
+    error: 'Service temporarily unavailable',
+    message: 'Unable to process cancellation due to high traffic. Please try again.'
+  });
+};
 
 
 
