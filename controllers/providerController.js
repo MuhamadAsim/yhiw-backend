@@ -614,7 +614,6 @@ export const getProviderStatus = async (req, res) => {
 
 
 
-
 export const getProviderInfo = async (req, res) => {
   try {
     const { firebaseUserId } = req.params;
@@ -636,8 +635,8 @@ export const getProviderInfo = async (req, res) => {
       status: { $in: ['completed', 'completed_confirmed'] }
     });
 
-    // ===== CALCULATE AVERAGE RATING =====
-    const ratingResult = await Job.aggregate([
+    // ===== CALCULATE AVERAGE RATING (LIFETIME) FOR PROFILE =====
+    const lifetimeRatingResult = await Job.aggregate([
       {
         $match: {
           providerId,
@@ -654,30 +653,33 @@ export const getProviderInfo = async (req, res) => {
       }
     ]);
 
-    const averageRating = ratingResult.length > 0 
-      ? Math.round(ratingResult[0].averageRating * 10) / 10 
+    const lifetimeRating = lifetimeRatingResult.length > 0 
+      ? Math.round(lifetimeRatingResult[0].averageRating * 10) / 10 
       : provider.rating || 4.8;
 
-    const totalReviews = ratingResult.length > 0 
-      ? ratingResult[0].totalReviews 
+    const totalReviews = lifetimeRatingResult.length > 0 
+      ? lifetimeRatingResult[0].totalReviews 
       : provider.totalReviews || 0;
 
-    // ===== GET TODAY'S PERFORMANCE DATA =====
+    // ===== GET TODAY'S DATE RANGE =====
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
+    // ===== GET TODAY'S JOBS =====
     const todayJobs = await Job.find({
       providerId,
       status: { $in: ['completed', 'completed_confirmed'] },
       completedAt: { $gte: today, $lt: tomorrow }
     });
 
+    // Calculate today's earnings
     const todayEarnings = todayJobs.reduce((sum, job) => 
       sum + (job.bookingData?.payment?.totalAmount || 0), 0
     );
 
+    // Calculate today's hours
     const todayHours = todayJobs.reduce((sum, job) => {
       if (job.completedAt && job.acceptedAt) {
         const duration = (new Date(job.completedAt) - new Date(job.acceptedAt)) / (1000 * 60 * 60);
@@ -686,6 +688,33 @@ export const getProviderInfo = async (req, res) => {
       // If no timing data, assume 1 hour per job
       return sum + 1;
     }, 0);
+
+    // ===== CALCULATE TODAY'S AVERAGE RATING =====
+    const todayRatingResult = await Job.aggregate([
+      {
+        $match: {
+          providerId,
+          status: { $in: ['completed', 'completed_confirmed'] },
+          completedAt: { $gte: today, $lt: tomorrow },
+          'customerRating.rating': { $exists: true, $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          averageRating: { $avg: '$customerRating.rating' },
+          todayReviews: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const todayRating = todayRatingResult.length > 0 
+      ? Math.round(todayRatingResult[0].averageRating * 10) / 10 
+      : 0; // Default to 0 if no ratings today
+
+    const todayReviews = todayRatingResult.length > 0 
+      ? todayRatingResult[0].todayReviews 
+      : 0;
 
     // ===== GET RECENT JOBS =====
     const recentJobs = await Job.find({
@@ -726,25 +755,26 @@ export const getProviderInfo = async (req, res) => {
     res.json({
       success: true,
       data: {
-        // Profile data for header
+        // Profile data for header (uses LIFETIME rating)
         profile: {
           name: provider.fullName,
           providerId: provider._id.toString().slice(-6), // Format like PRV-001234
-          email: provider.email,//
+          email: provider.email,
           phoneNumber: provider.phoneNumber,
-          rating: averageRating,
+          rating: lifetimeRating, // LIFETIME rating for profile
           totalJobs: totalJobs,
           isVerified: provider.status === 'active',
           memberSince: provider.createdAt,
           serviceType: provider.serviceType || [],
           description: provider.description || '',
         },
-        // Today's performance data
+        // Today's performance data (uses TODAY'S rating)
         performance: {
           earnings: Number(todayEarnings.toFixed(2)),
           jobs: todayJobs.length,
           hours: Number(todayHours.toFixed(1)),
-          rating: averageRating,
+          rating: todayRating, // TODAY'S rating for performance card
+          reviews: todayReviews, // Optional: number of reviews today
         },
         // Recent jobs
         recentJobs: formattedRecentJobs
@@ -763,7 +793,7 @@ export const getProviderInfo = async (req, res) => {
           providerId: '001234',
           email: '',
           phoneNumber: '',
-          rating: 4.8,
+          rating: 4.8, // Default lifetime rating
           totalJobs: 0,
           isVerified: true,
           memberSince: new Date(),
@@ -774,17 +804,14 @@ export const getProviderInfo = async (req, res) => {
           earnings: 0,
           jobs: 0,
           hours: 0,
-          rating: 4.8,
+          rating: 0, 
+          reviews: 0,
         },
         recentJobs: []
       }
     });
   }
 };
-
-
-
-
 
 
 
@@ -1083,63 +1110,253 @@ export const reportServiceIssue = async (req, res) => {
 
 
 
+
+
 export const completeService = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const providerId = req.user.id;
     const { 
-      completionNotes, 
+      completionNotes,
       checklistCompleted,
-      issuesFound 
+      issuesFound,
+      timeTracking,
+      photos,
+      paymentReceived,
+      customerConfirmed,
+      durationSeconds
     } = req.body;
 
-    const job = await Job.findOne({ bookingId, providerId });
+    console.log('🔍 Completing service:', { bookingId, providerId });
+
+    // Find the job with all necessary fields
+    const job = await Job.findOne({ 
+      bookingId, 
+      providerId,
+      status: { $in: ['accepted', 'in_progress'] } // Only allow completion from these statuses
+    });
     
     if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
+      return res.status(404).json({ 
+        error: 'Job not found or already completed',
+        details: 'The service may have been already completed or cancelled'
+      });
     }
 
+    // Calculate earnings based on actual duration if provided
+    let finalEarnings = job.bookingData?.payment?.totalAmount || 0;
+    let platformFee = finalEarnings * 0.15;
+    let providerEarnings = finalEarnings - platformFee;
+
+    // If we have duration data, we could adjust earnings based on overtime
+    if (durationSeconds && job.bookingData?.payment?.baseServiceFee) {
+      const baseDuration = 3600; // Assume 1 hour base service
+      const extraSeconds = Math.max(0, durationSeconds - baseDuration);
+      if (extraSeconds > 0) {
+        const extraMinutes = Math.ceil(extraSeconds / 60);
+        const extraFee = extraMinutes * 2; // 2 BHD per extra minute as example
+        finalEarnings += extraFee;
+        platformFee = finalEarnings * 0.15;
+        providerEarnings = finalEarnings - platformFee;
+      }
+    }
+
+    // Update job with completion details
     job.status = 'completed';
     job.completedAt = new Date();
+    
+    // Update time tracking if provided
+    if (timeTracking || durationSeconds) {
+      job.timeTracking = {
+        ...job.timeTracking,
+        totalSeconds: durationSeconds || job.timeTracking?.totalSeconds || 0,
+        isPaused: false,
+        ...timeTracking
+      };
+    }
+
+    // Add photos if provided
+    if (photos && photos.length > 0) {
+      job.photos = [...(job.photos || []), ...photos.map(photo => ({
+        type: photo.type || 'post-service',
+        url: photo.url,
+        description: photo.description || 'Service completion photo',
+        uploadedAt: new Date()
+      }))];
+    }
+
+    // Add issues if found
+    if (issuesFound && issuesFound.length > 0) {
+      job.issues = [...(job.issues || []), ...issuesFound.map(issue => ({
+        type: issue.type || 'service-issue',
+        description: issue.description || issue,
+        severity: issue.severity || 'medium',
+        reportedAt: new Date(),
+        status: 'open'
+      }))];
+    }
+
+    // Comprehensive completion details
     job.completionDetails = {
-      notes: completionNotes,
+      notes: completionNotes || '',
       checklistCompleted: checklistCompleted || [],
-      issuesFound: issuesFound || [],
-      completedBy: providerId
+      issuesFound: issuesFound?.map(i => i.description || i) || [],
+      completedBy: providerId,
+      paymentReceived: paymentReceived || false,
+      customerConfirmed: customerConfirmed || false,
+      completedAt: new Date().toISOString(),
+      duration: durationSeconds || 0,
+      finalEarnings: finalEarnings,
+      platformFee: platformFee,
+      providerEarnings: providerEarnings
     };
 
     await job.save();
 
+    // Update provider's live status and stats
     const providerStatus = await ProviderLiveStatus.findOneAndUpdate(
       { providerId },
       { 
         isAvailable: true, 
-        currentBookingId: null
+        currentBookingId: null,
+        lastCompletedAt: new Date()
       },
-      { new: true }
+      { new: true, upsert: true }
     );
 
+    // Update provider's performance stats
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    let providerStats = await ProviderStats.findOneAndUpdate(
+      { 
+        providerId,
+        date: {
+          $gte: today,
+          $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+        }
+      },
+      {
+        $inc: { 
+          jobsCompleted: 1,
+          totalEarnings: providerEarnings,
+          totalMinutes: Math.ceil(durationSeconds / 60) || 0
+        },
+        $set: { lastUpdated: new Date() }
+      },
+      { upsert: true, new: true }
+    );
+
+    // Update overall provider stats
     const totalJobsCompleted = (providerStatus?.totalJobsCompleted || 0) + 1;
     
     await ProviderLiveStatus.findOneAndUpdate(
       { providerId },
-      { totalJobsCompleted }
+      { 
+        totalJobsCompleted,
+        totalEarnings: (providerStatus?.totalEarnings || 0) + providerEarnings
+      }
     );
 
+    // Send success response with all relevant data
     res.json({ 
       success: true, 
       message: 'Service completed successfully',
-      earnings: job.bookingData?.payment?.totalAmount,
-      totalJobsCompleted
+      data: {
+        bookingId: job.bookingId,
+        status: job.status,
+        completedAt: job.completedAt,
+        earnings: {
+          totalAmount: finalEarnings,
+          platformFee: platformFee,
+          providerEarnings: providerEarnings
+        },
+        providerStats: {
+          todayEarnings: providerStats?.totalEarnings || 0,
+          todayJobs: providerStats?.jobsCompleted || 0,
+          totalJobsCompleted: totalJobsCompleted
+        }
+      }
     });
 
   } catch (error) {
-    console.error('Complete service error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('❌ Complete service error:', error);
+    res.status(500).json({ 
+      error: 'Failed to complete service',
+      message: error.message,
+      details: 'An unexpected error occurred while completing the service'
+    });
   }
 };
 
+// Add this helper function to get provider's today's stats
+export const getProviderTodayStats = async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
 
+    // Get today's completed jobs
+    const todayJobs = await Job.find({
+      providerId,
+      status: 'completed',
+      completedAt: {
+        $gte: today,
+        $lt: tomorrow
+      }
+    });
+
+    // Calculate today's earnings
+    let todayEarnings = 0;
+    let totalMinutes = 0;
+
+    todayJobs.forEach(job => {
+      if (job.completionDetails?.providerEarnings) {
+        todayEarnings += job.completionDetails.providerEarnings;
+      } else if (job.bookingData?.payment?.totalAmount) {
+        // Fallback calculation
+        const total = job.bookingData.payment.totalAmount;
+        todayEarnings += total - (total * 0.15);
+      }
+      
+      if (job.timeTracking?.totalSeconds) {
+        totalMinutes += Math.ceil(job.timeTracking.totalSeconds / 60);
+      }
+    });
+
+    // Get provider stats from ProviderStats collection
+    const providerStats = await ProviderStats.findOne({
+      providerId,
+      date: {
+        $gte: today,
+        $lt: tomorrow
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        earnings: providerStats?.totalEarnings || todayEarnings,
+        jobs: providerStats?.jobsCompleted || todayJobs.length,
+        totalMinutes: providerStats?.totalMinutes || totalMinutes,
+        jobsList: todayJobs.map(job => ({
+          bookingId: job.bookingId,
+          serviceName: job.bookingData?.serviceName,
+          completedAt: job.completedAt,
+          earnings: job.completionDetails?.providerEarnings || 
+                   (job.bookingData?.payment?.totalAmount * 0.85)
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching provider stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
 
 
 

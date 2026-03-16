@@ -191,23 +191,30 @@ export const createJobNotification = async (req, res) => {
 
 
 
-
-
 export const checkJobStatus = async (req, res) => {
   try {
     const { bookingId } = req.params;
 
-    // 1. First check if job exists (accepted)
+    // 1. First check if job exists and get its status
     const job = await Job.findOne({ bookingId });
     
     if (job) {
-      return res.json({ status: 'accepted' });
+      // Return the actual job status - could be 'accepted', 'in_progress', 'completed', etc.
+      return res.json({ 
+        status: job.status,
+        completedAt: job.completedAt,
+        startedAt: job.startedAt,
+        cancelledAt: job.cancelledAt,
+        cancelledBy: job.cancelledBy,
+        cancellationReason: job.cancellationReason,
+        timeTracking: job.timeTracking
+      });
     }
 
     // 2. Check if still in notification (searching)
     const notification = await Notification.findOne({ 
       bookingId,
-      status: 'pending' // Only return if still pending
+      status: 'pending'
     });
     
     if (notification) {
@@ -222,7 +229,6 @@ export const checkJobStatus = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
 
 
 
