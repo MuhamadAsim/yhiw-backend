@@ -97,7 +97,6 @@ const userSchema = new mongoose.Schema({
   // Professional Info
   serviceType: {
     type: [String], 
-    required: true,
     enum: [
       'Towing',
       'Roadside Assistance',
