@@ -1111,7 +1111,6 @@ export const reportServiceIssue = async (req, res) => {
 
 
 
-
 export const completeService = async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -1129,43 +1128,29 @@ export const completeService = async (req, res) => {
 
     console.log('🔍 Completing service:', { bookingId, providerId });
 
-    // Find the job with all necessary fields
+    // Find the job
     const job = await Job.findOne({ 
       bookingId, 
       providerId,
-      status: { $in: ['accepted', 'in_progress'] } // Only allow completion from these statuses
+      status: { $in: ['accepted', 'in_progress'] }
     });
     
     if (!job) {
       return res.status(404).json({ 
-        error: 'Job not found or already completed',
-        details: 'The service may have been already completed or cancelled'
+        error: 'Job not found or already completed'
       });
     }
 
-    // Calculate earnings based on actual duration if provided
+    // Calculate earnings
     let finalEarnings = job.bookingData?.payment?.totalAmount || 0;
     let platformFee = finalEarnings * 0.15;
     let providerEarnings = finalEarnings - platformFee;
-
-    // If we have duration data, we could adjust earnings based on overtime
-    if (durationSeconds && job.bookingData?.payment?.baseServiceFee) {
-      const baseDuration = 3600; // Assume 1 hour base service
-      const extraSeconds = Math.max(0, durationSeconds - baseDuration);
-      if (extraSeconds > 0) {
-        const extraMinutes = Math.ceil(extraSeconds / 60);
-        const extraFee = extraMinutes * 2; // 2 BHD per extra minute as example
-        finalEarnings += extraFee;
-        platformFee = finalEarnings * 0.15;
-        providerEarnings = finalEarnings - platformFee;
-      }
-    }
 
     // Update job with completion details
     job.status = 'completed';
     job.completedAt = new Date();
     
-    // Update time tracking if provided
+    // Update time tracking
     if (timeTracking || durationSeconds) {
       job.timeTracking = {
         ...job.timeTracking,
@@ -1185,80 +1170,36 @@ export const completeService = async (req, res) => {
       }))];
     }
 
-    // Add issues if found
-    if (issuesFound && issuesFound.length > 0) {
-      job.issues = [...(job.issues || []), ...issuesFound.map(issue => ({
-        type: issue.type || 'service-issue',
-        description: issue.description || issue,
-        severity: issue.severity || 'medium',
-        reportedAt: new Date(),
-        status: 'open'
-      }))];
-    }
-
-    // Comprehensive completion details
+    // Add completion details
     job.completionDetails = {
       notes: completionNotes || '',
       checklistCompleted: checklistCompleted || [],
       issuesFound: issuesFound?.map(i => i.description || i) || [],
       completedBy: providerId,
-      paymentReceived: paymentReceived || false,
-      customerConfirmed: customerConfirmed || false,
-      completedAt: new Date().toISOString(),
-      duration: durationSeconds || 0,
-      finalEarnings: finalEarnings,
-      platformFee: platformFee,
-      providerEarnings: providerEarnings
+      completedAt: new Date()
     };
 
     await job.save();
 
-    // Update provider's live status and stats
-    const providerStatus = await ProviderLiveStatus.findOneAndUpdate(
+    // ✅ FIX 1: Update provider's live status correctly
+    await ProviderLiveStatus.findOneAndUpdate(
       { providerId },
       { 
         isAvailable: true, 
         currentBookingId: null,
-        lastCompletedAt: new Date()
-      },
-      { new: true, upsert: true }
-    );
-
-    // Update provider's performance stats
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    let providerStats = await ProviderStats.findOneAndUpdate(
-      { 
-        providerId,
-        date: {
-          $gte: today,
-          $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
-        }
-      },
-      {
-        $inc: { 
-          jobsCompleted: 1,
-          totalEarnings: providerEarnings,
-          totalMinutes: Math.ceil(durationSeconds / 60) || 0
-        },
-        $set: { lastUpdated: new Date() }
-      },
-      { upsert: true, new: true }
-    );
-
-    // Update overall provider stats
-    const totalJobsCompleted = (providerStatus?.totalJobsCompleted || 0) + 1;
-    
-    await ProviderLiveStatus.findOneAndUpdate(
-      { providerId },
-      { 
-        totalJobsCompleted,
-        totalEarnings: (providerStatus?.totalEarnings || 0) + providerEarnings
+        lastSeen: new Date()  // Using lastSeen instead of lastCompletedAt
       }
     );
 
-    // Send success response with all relevant data
+    // ✅ FIX 2: Update provider stats in User model
+    const provider = await User.findById(providerId);
+    if (provider) {
+      provider.totalJobsCompleted = (provider.totalJobsCompleted || 0) + 1;
+      provider.totalEarnings = (provider.totalEarnings || 0) + providerEarnings;
+      await provider.save();
+    }
+
+    // Send success response
     res.json({ 
       success: true, 
       message: 'Service completed successfully',
@@ -1272,9 +1213,8 @@ export const completeService = async (req, res) => {
           providerEarnings: providerEarnings
         },
         providerStats: {
-          todayEarnings: providerStats?.totalEarnings || 0,
-          todayJobs: providerStats?.jobsCompleted || 0,
-          totalJobsCompleted: totalJobsCompleted
+          totalJobsCompleted: provider?.totalJobsCompleted || 0,
+          totalEarnings: provider?.totalEarnings || 0
         }
       }
     });
@@ -1283,13 +1223,14 @@ export const completeService = async (req, res) => {
     console.error('❌ Complete service error:', error);
     res.status(500).json({ 
       error: 'Failed to complete service',
-      message: error.message,
-      details: 'An unexpected error occurred while completing the service'
+      message: error.message
     });
   }
 };
 
-// Add this helper function to get provider's today's stats
+
+
+
 export const getProviderTodayStats = async (req, res) => {
   try {
     const { providerId } = req.params;
@@ -1299,67 +1240,98 @@ export const getProviderTodayStats = async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    // Get today's completed jobs
-    const todayJobs = await Job.find({
-      providerId,
-      status: 'completed',
-      completedAt: {
-        $gte: today,
-        $lt: tomorrow
-      }
-    });
+    // Use aggregation for better performance
+    const [todayStats, providerStats] = await Promise.all([
+      // Get today's stats using aggregation
+      Job.aggregate([
+        {
+          $match: {
+            providerId: new mongoose.Types.ObjectId(providerId),
+            status: 'completed',
+            completedAt: { $gte: today, $lt: tomorrow }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalEarnings: {
+              $sum: {
+                $multiply: [
+                  { $ifNull: ['$bookingData.payment.totalAmount', 0] },
+                  0.85 // 85% after platform fee
+                ]
+              }
+            },
+            totalMinutes: {
+              $sum: {
+                $ceil: {
+                  $divide: [
+                    { $ifNull: ['$timeTracking.totalSeconds', 0] },
+                    60
+                  ]
+                }
+              }
+            },
+            jobsCount: { $sum: 1 },
+            jobs: {
+              $push: {
+                bookingId: '$bookingId',
+                serviceName: { $ifNull: ['$bookingData.serviceName', 'Service'] },
+                completedAt: '$completedAt',
+                earnings: {
+                  $multiply: [
+                    { $ifNull: ['$bookingData.payment.totalAmount', 0] },
+                    0.85
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]),
 
-    // Calculate today's earnings
-    let todayEarnings = 0;
-    let totalMinutes = 0;
+      // Get overall stats from User model
+      User.findById(providerId)
+        .select('totalJobsCompleted totalEarnings rating totalReviews')
+        .lean()
+    ]);
 
-    todayJobs.forEach(job => {
-      if (job.completionDetails?.providerEarnings) {
-        todayEarnings += job.completionDetails.providerEarnings;
-      } else if (job.bookingData?.payment?.totalAmount) {
-        // Fallback calculation
-        const total = job.bookingData.payment.totalAmount;
-        todayEarnings += total - (total * 0.15);
-      }
-      
-      if (job.timeTracking?.totalSeconds) {
-        totalMinutes += Math.ceil(job.timeTracking.totalSeconds / 60);
-      }
-    });
-
-    // Get provider stats from ProviderStats collection
-    const providerStats = await ProviderStats.findOne({
-      providerId,
-      date: {
-        $gte: today,
-        $lt: tomorrow
-      }
-    });
+    const todayData = todayStats[0] || {
+      totalEarnings: 0,
+      totalMinutes: 0,
+      jobsCount: 0,
+      jobs: []
+    };
 
     res.json({
       success: true,
       data: {
-        earnings: providerStats?.totalEarnings || todayEarnings,
-        jobs: providerStats?.jobsCompleted || todayJobs.length,
-        totalMinutes: providerStats?.totalMinutes || totalMinutes,
-        jobsList: todayJobs.map(job => ({
-          bookingId: job.bookingId,
-          serviceName: job.bookingData?.serviceName,
-          completedAt: job.completedAt,
-          earnings: job.completionDetails?.providerEarnings || 
-                   (job.bookingData?.payment?.totalAmount * 0.85)
-        }))
+        // Today's stats
+        todayEarnings: todayData.totalEarnings,
+        todayJobs: todayData.jobsCount,
+        todayMinutes: todayData.totalMinutes,
+        
+        // Today's jobs list
+        jobsList: todayData.jobs,
+        
+        // Overall stats from User model
+        overallStats: {
+          totalJobsCompleted: providerStats?.totalJobsCompleted || 0,
+          totalEarnings: providerStats?.totalEarnings || 0,
+          rating: providerStats?.rating || 0,
+          totalReviews: providerStats?.totalReviews || 0
+        }
       }
     });
 
   } catch (error) {
     console.error('Error fetching provider stats:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
   }
 };
-
-
-
 
 
 
