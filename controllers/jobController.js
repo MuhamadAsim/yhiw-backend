@@ -13,7 +13,7 @@ export const createJobNotification = async (req, res) => {
     console.log('👤 User ID:', req.user.id);
 
     // Get the nested data structure from frontend
-    const { 
+    const {
       bookingId,
       pickup,           // <-- This is an object { address, coordinates }
       dropoff,          // <-- This is an object { address, coordinates }
@@ -45,10 +45,10 @@ export const createJobNotification = async (req, res) => {
     console.log('  serviceName:', serviceName);
     console.log('  servicePrice:', servicePrice);
     console.log('  serviceCategory:', serviceCategory);
-    
+
     console.log('\n📍 PICKUP DATA:');
     console.log('  pickup:', pickup);
-    
+
     console.log('\n🚗 VEHICLE DATA (RAW):');
     console.log('  vehicle:', vehicle);
     console.log('  vehicle.type:', vehicle?.type);
@@ -56,13 +56,13 @@ export const createJobNotification = async (req, res) => {
     console.log('  vehicle.year:', vehicle?.year);
     console.log('  vehicle.color:', vehicle?.color);
     console.log('  vehicle.licensePlate:', vehicle?.licensePlate);
-    
+
     console.log('\n👤 CUSTOMER DATA:');
     console.log('  customer:', customer);
-    
+
     console.log('\n💰 PAYMENT DATA:');
     console.log('  payment:', payment);
-    
+
     console.log('\n🔧 ADDITIONAL DETAILS:');
     console.log('  additionalDetails:', additionalDetails);
 
@@ -90,55 +90,55 @@ export const createJobNotification = async (req, res) => {
     const notificationData = {
       bookingId,
       customerId: req.user.id,
-      
+
       // Service info
-      serviceId, 
-      serviceName, 
-      servicePrice, 
+      serviceId,
+      serviceName,
+      servicePrice,
       serviceCategory,
-      
+
       // Location data
       pickup: pickup || {
         address: '',
         coordinates: null
       },
       dropoff: dropoff || null,
-      
+
       // ✅ FIXED: Use vehicleData with vehicleType
       vehicle: vehicleData,
-      
+
       // Customer contact (minimal - name and phone only as per schema)
       customer: {
         name: customer?.name || '',
         phone: customer?.phone || ''
       },
-      
+
       // Urgency and description
       urgency: additionalDetails?.urgency || 'immediate',
       issues: additionalDetails?.issues || [],
       description: additionalDetails?.description || '',
-      
+
       // Payment info
       payment: payment || {
         totalAmount: 0,
         selectedTip: 0,
         baseServiceFee: servicePrice || 0
       },
-      
+
       // Service-specific flags
       isCarRental: isCarRental || false,
       isFuelDelivery: isFuelDelivery || false,
       isSpareParts: isSpareParts || false,
-      
+
       // Fuel specific
       fuelType: fuelDelivery?.fuelType || null,
-      
+
       // Spare parts specific
       partDescription: spareParts?.partDescription || null,
-      
+
       // Rental specific
       hasInsurance: carRental?.hasInsurance || false,
-      
+
       // Status
       status: 'pending'
     };
@@ -171,7 +171,7 @@ export const createJobNotification = async (req, res) => {
     console.error('Error name:', error.name);
     console.error('Error message:', error.message);
     console.error('Full error:', error);
-    
+
     if (error.name === 'ValidationError') {
       console.error('\n📋 VALIDATION ERRORS:');
       Object.keys(error.errors).forEach(field => {
@@ -181,10 +181,10 @@ export const createJobNotification = async (req, res) => {
         console.error(`    Path:`, error.errors[field].path);
       });
     }
-    
+
     console.log('\n📤 SENDING ERROR RESPONSE');
     console.log('🔵 ===== CREATE JOB NOTIFICATION FAILED =====\n');
-    
+
     res.status(500).json({ error: error.message });
   }
 };
@@ -197,10 +197,10 @@ export const checkJobStatus = async (req, res) => {
 
     // 1. First check if job exists and get its status
     const job = await Job.findOne({ bookingId });
-    
+
     if (job) {
       // Return the actual job status - could be 'accepted', 'in_progress', 'completed', etc.
-      return res.json({ 
+      return res.json({
         status: job.status,
         completedAt: job.completedAt,
         startedAt: job.startedAt,
@@ -212,11 +212,11 @@ export const checkJobStatus = async (req, res) => {
     }
 
     // 2. Check if still in notification (searching)
-    const notification = await Notification.findOne({ 
+    const notification = await Notification.findOne({
       bookingId,
       status: 'pending'
     });
-    
+
     if (notification) {
       return res.json({ status: 'searching' });
     }
@@ -240,13 +240,13 @@ export const checkJobStatus = async (req, res) => {
 export const cancelJob = async (req, res) => {
   const maxRetries = 3;
   let retryCount = 0;
-  
+
   while (retryCount < maxRetries) {
     const session = await mongoose.startSession();
-    
+
     try {
       session.startTransaction();
-      
+
       const { bookingId } = req.params;
       const { reason } = req.body;
       const userId = req.user.id;
@@ -257,7 +257,7 @@ export const cancelJob = async (req, res) => {
 
       // Use findOneAndUpdate with optimistic concurrency control
       const activeJob = await Job.findOneAndUpdate(
-        { 
+        {
           bookingId,
           status: { $in: ['accepted', 'in_progress'] },
           // Add version check if you have version field (__v)
@@ -271,7 +271,7 @@ export const cancelJob = async (req, res) => {
             cancelledBy: userId
           }
         },
-        { 
+        {
           new: true,
           session,
           runValidators: true
@@ -280,11 +280,11 @@ export const cancelJob = async (req, res) => {
 
       if (activeJob) {
         // Verify ownership
-        if (activeJob.customerId.toString() !== userId && 
-            activeJob.providerId?.toString() !== userId) {
+        if (activeJob.customerId.toString() !== userId &&
+          activeJob.providerId?.toString() !== userId) {
           await session.abortTransaction();
           session.endSession();
-          return res.status(403).json({ 
+          return res.status(403).json({
             error: 'Unauthorized',
             message: 'You do not have permission to cancel this job'
           });
@@ -300,7 +300,7 @@ export const cancelJob = async (req, res) => {
               currentJobStatus: null,
               lastSeen: new Date()
             },
-            { 
+            {
               session,
               new: true // Return updated document
             }
@@ -316,7 +316,7 @@ export const cancelJob = async (req, res) => {
               lastSeen: new Date()
             }], { session });
           }
-          
+
           console.log(`✅ Provider ${activeJob.providerId} marked as available`);
         }
 
@@ -336,8 +336,8 @@ export const cancelJob = async (req, res) => {
 
       // Check for pending notification with atomic update
       const notification = await Notification.findOneAndUpdate(
-        { 
-          bookingId, 
+        {
+          bookingId,
           status: 'pending',
           // Ensure we only cancel if still pending
           $or: [
@@ -345,23 +345,23 @@ export const cancelJob = async (req, res) => {
             { expiresAt: { $exists: false } }
           ]
         },
-        { 
-          $set: { 
+        {
+          $set: {
             status: 'cancelled',
             cancelledAt: new Date(),
             cancellationReason: reason || 'cancelled_by_customer'
-          } 
+          }
         },
-        { 
+        {
           new: true,
           session,
           runValidators: true
         }
-    );
+      );
 
       if (!notification) {
         // Check if job exists in terminal state
-        const existingJob = await Job.findOne({ 
+        const existingJob = await Job.findOne({
           bookingId,
           status: { $in: ['completed', 'cancelled', 'expired'] }
         }).session(session);
@@ -392,7 +392,7 @@ export const cancelJob = async (req, res) => {
 
         await session.abortTransaction();
         session.endSession();
-        return res.status(404).json({ 
+        return res.status(404).json({
           error: 'Booking not found',
           message: 'No active booking found with this ID'
         });
@@ -416,26 +416,26 @@ export const cancelJob = async (req, res) => {
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
-      
+
       // Check for write conflict error
       if (error.code === 112 || // Write conflict
-          error.codeName === 'WriteConflict' ||
-          error.message.includes('WriteConflict')) {
-        
+        error.codeName === 'WriteConflict' ||
+        error.message.includes('WriteConflict')) {
+
         console.log(`⚠️ Write conflict detected, retry ${retryCount + 1}/${maxRetries}`);
         retryCount++;
-        
+
         if (retryCount < maxRetries) {
           // Exponential backoff
           await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 100));
           continue;
         }
       }
-      
+
       console.error('❌ Cancel job error:', error);
-      
+
       // Don't show raw error to customer
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: 'Unable to cancel booking',
         message: 'Please try again in a few moments'
       });
@@ -464,9 +464,9 @@ export const getJobDetails = async (req, res) => {
     const providerId = req.user.id;
 
     // First check if job exists in Notification (pending)
-    let job = await Notification.findOne({ 
+    let job = await Notification.findOne({
       bookingId,
-      status: 'pending' 
+      status: 'pending'
     });
 
     if (job) {
@@ -476,9 +476,9 @@ export const getJobDetails = async (req, res) => {
 
       // Calculate distance from provider to pickup (if provider has location)
       let distance = '2.5 km'; // Default fallback
-      
+
       const providerLocation = await ProviderLiveStatus.findOne({ providerId });
-      
+
       if (providerLocation?.currentLocation?.coordinates) {
         // Calculate distance using coordinates
         // This is a simplified version - you might want to use a proper distance calculation
@@ -486,7 +486,7 @@ export const getJobDetails = async (req, res) => {
         const providerLat = providerLocation.currentLocation.coordinates[1];
         const pickupLat = job.pickup?.coordinates?.lat;
         const pickupLng = job.pickup?.coordinates?.lng;
-        
+
         if (pickupLat && pickupLng) {
           // Simple Euclidean distance (for demo - replace with proper geo calculation)
           const latDiff = Math.abs(providerLat - pickupLat) * 111; // 1 degree ≈ 111 km
@@ -591,8 +591,8 @@ export const rateCompletedJob = async (req, res) => {
     }
 
     // Find the job - must belong to this customer and be completed
-    const job = await Job.findOne({ 
-      bookingId, 
+    const job = await Job.findOne({
+      bookingId,
       customerId,
       status: 'completed' // Only allow rating completed jobs
     });
@@ -618,20 +618,20 @@ export const rateCompletedJob = async (req, res) => {
       review: review || '',
       createdAt: new Date()
     };
-    
+
     await job.save();
 
     // Update provider's average rating in User model
     if (job.providerId) {
       // Get all completed jobs for this provider with ratings
-      const providerJobs = await Job.find({ 
+      const providerJobs = await Job.find({
         providerId: job.providerId,
         status: 'completed',
         'customerRating.rating': { $exists: true }
       });
 
       // Calculate average rating
-      const totalRating = providerJobs.reduce((sum, j) => 
+      const totalRating = providerJobs.reduce((sum, j) =>
         sum + (j.customerRating?.rating || 0), 0
       );
       const averageRating = totalRating / providerJobs.length;
@@ -654,9 +654,9 @@ export const rateCompletedJob = async (req, res) => {
 
   } catch (error) {
     console.error('Rate job error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 };
@@ -674,8 +674,8 @@ export const getJobRating = async (req, res) => {
     console.log(`📋 Fetching rating for booking: ${bookingId}`);
 
     // Find the job - must belong to this customer
-    const job = await Job.findOne({ 
-      bookingId, 
+    const job = await Job.findOne({
+      bookingId,
       customerId,
       status: { $in: ['completed', 'completed_confirmed'] }
     }).select('customerRating status');
@@ -700,9 +700,9 @@ export const getJobRating = async (req, res) => {
 
   } catch (error) {
     console.error('Get job rating error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 };
@@ -713,14 +713,13 @@ export const getJobRating = async (req, res) => {
 
 
 
-
 // @desc    Get timer data for a job
-// @route   GET /api/provider/job/:bookingId/timer
+// @route   GET /api/jobs/:bookingId/timer
 export const getJobTimer = async (req, res) => {
   try {
     const { bookingId } = req.params;
 
-    // Find job by bookingId only
+    // Find job by bookingId
     const job = await Job.findOne({ bookingId: bookingId });
 
     if (!job) {
@@ -735,7 +734,8 @@ export const getJobTimer = async (req, res) => {
       timer: {
         durationSeconds: job.timeTracking?.totalSeconds || 0,
         isPaused: job.timeTracking?.isPaused || false,
-        pausedAt: job.timeTracking?.pausedAt || null
+        pausedAt: job.timeTracking?.pausedAt || null,
+        lastUpdated: job.timeTracking?.lastUpdated || null // Added lastUpdated
       }
     });
 
@@ -749,13 +749,13 @@ export const getJobTimer = async (req, res) => {
 };
 
 // @desc    Update timer data for a job
-// @route   PATCH /api/provider/:bookingId/timer
+// @route   PATCH /api/jobs/:bookingId/timer
 export const updateJobTimer = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { durationSeconds, paused, action } = req.body;
+    const { durationSeconds, paused, action, lastUpdated, addedMinutes } = req.body;
 
-    // Find job by bookingId only
+    // Find job by bookingId
     const job = await Job.findOne({ bookingId: bookingId });
 
     if (!job) {
@@ -770,13 +770,21 @@ export const updateJobTimer = async (req, res) => {
       job.timeTracking = {
         totalSeconds: 0,
         isPaused: false,
-        timeExtensions: []
+        timeExtensions: [],
+        lastUpdated: new Date()
       };
     }
 
     // Update time tracking
     job.timeTracking.totalSeconds = durationSeconds;
     job.timeTracking.isPaused = paused || false;
+
+    // Update lastUpdated timestamp
+    if (lastUpdated) {
+      job.timeTracking.lastUpdated = new Date(lastUpdated);
+    } else {
+      job.timeTracking.lastUpdated = new Date();
+    }
 
     // Update pausedAt based on action
     if (action === 'pause') {
@@ -785,13 +793,29 @@ export const updateJobTimer = async (req, res) => {
       job.timeTracking.pausedAt = null;
     } else if (action === 'complete') {
       job.timeTracking.pausedAt = null;
-      // Don't change job status here - that's handled separately
+    }
+
+    // Handle time extension
+    if (action === 'add_time' && addedMinutes) {
+      job.timeTracking.timeExtensions.push({
+        minutes: addedMinutes,
+        reason: 'Provider added time',
+        requestedAt: new Date(),
+        approved: true
+      });
     }
 
     // If starting the job (first time)
     if (action === 'start' && job.status === 'accepted') {
       job.status = 'in_progress';
       job.startedAt = new Date();
+      job.timeTracking.lastUpdated = new Date();
+    }
+
+    // Handle sync action - just update without changing status
+    if (action === 'sync') {
+      // Just update the timer, no status change
+      console.log(`Timer synced: ${durationSeconds}s for job ${bookingId}`);
     }
 
     await job.save();
@@ -802,7 +826,8 @@ export const updateJobTimer = async (req, res) => {
       timer: {
         durationSeconds: job.timeTracking.totalSeconds,
         isPaused: job.timeTracking.isPaused,
-        pausedAt: job.timeTracking.pausedAt
+        pausedAt: job.timeTracking.pausedAt,
+        lastUpdated: job.timeTracking.lastUpdated
       }
     });
 

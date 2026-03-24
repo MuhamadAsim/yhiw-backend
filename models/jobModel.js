@@ -75,28 +75,29 @@ const jobSchema = new mongoose.Schema({
     hasInsurance: Boolean
   },
 
-  // Job status - ONLY these 4 values
+  // Job status
   status: {
     type: String,
-    enum: ['accepted', 'in_progress', 'completed', 'cancelled','completed_confirmed'],
+    enum: ['accepted', 'in_progress', 'completed', 'cancelled', 'completed_confirmed', 'completed_provider'],
     default: 'accepted'
   },
 
   // Timeline
   acceptedAt: { type: Date, default: Date.now },
-  startedAt: Date,        // When service started (status becomes 'in_progress')
-  completedAt: Date,      // When service completed
+  startedAt: Date,
+  completedAt: Date,
   cancelledAt: Date,
   cancelledBy: {
     type: String,
     enum: ['customer', 'provider', 'system']
   },
 
-  // NEW: Time tracking for service
+  // UPDATED: Time tracking for service with lastUpdated field
   timeTracking: {
     totalSeconds: { type: Number, default: 0 },
     pausedAt: Date,
     isPaused: { type: Boolean, default: false },
+    lastUpdated: { type: Date, default: Date.now }, // Added for sync tracking
     timeExtensions: [{
       minutes: Number,
       reason: String,
@@ -105,7 +106,7 @@ const jobSchema = new mongoose.Schema({
     }]
   },
 
-  // NEW: Photos documentation
+  // Photos documentation
   photos: [{
     type: {
       type: String,
@@ -117,7 +118,7 @@ const jobSchema = new mongoose.Schema({
     uploadedAt: { type: Date, default: Date.now }
   }],
 
-  // NEW: Issues reported during service
+  // Issues reported during service
   issues: [{
     type: String,
     description: String,
@@ -126,7 +127,7 @@ const jobSchema = new mongoose.Schema({
     status: { type: String, enum: ['open', 'resolved'], default: 'open' }
   }],
 
-  // NEW: Service completion details
+  // Service completion details
   completionDetails: {
     notes: String,
     checklistCompleted: [String],
