@@ -1282,3 +1282,98 @@ export const getCustomerJobDetailServiceInprogress = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+
+/**
+ * Update job status from customer side
+ * Endpoint: PATCH /api/customer/:bookingId/status
+ */
+export const updateCustomerJobStatus = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { status, action, confirmedAt } = req.body;
+    const customerId = req.user.id;
+
+    const updateData = {};
+
+    // Handle customer confirming completion
+    if (status === 'completed_confirmed' && action === 'customer_confirm') {
+      // First check if the job is in completed_provider status
+      const existingJob = await Job.findOne({ bookingId, customerId });
+      
+      if (!existingJob) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+      
+      if (existingJob.status !== 'completed_provider') {
+        return res.status(400).json({ 
+          error: 'Cannot confirm completion - provider has not completed the service yet',
+          currentStatus: existingJob.status
+        });
+      }
+
+      updateData.status = 'completed_confirmed';
+      updateData.completedAt = confirmedAt ? new Date(confirmedAt) : new Date();
+      
+      // Optional: Add customer confirmation notes
+      if (req.body.confirmationNotes) {
+        updateData['completionDetails.customerNotes'] = req.body.confirmationNotes;
+        updateData['completionDetails.confirmedBy'] = customerId;
+        updateData['completionDetails.confirmedAt'] = new Date();
+      }
+
+      console.log(`✅ Customer confirmed completion for booking: ${bookingId}`);
+      
+      // Release provider for new jobs
+      const job = await Job.findOne({ bookingId });
+      if (job && job.providerId) {
+        await ProviderLiveStatus.findOneAndUpdate(
+          { providerId: job.providerId },
+          { isAvailable: true, currentBookingId: null }
+        );
+      }
+    }
+    else if (status === 'cancelled' && action === 'customer_cancel') {
+      updateData.status = 'cancelled';
+      updateData.cancelledAt = new Date();
+      updateData.cancelledBy = 'customer';
+      updateData.cancellationReason = req.body.reason || 'Cancelled by customer';
+      
+      // Release provider
+      const job = await Job.findOne({ bookingId });
+      if (job && job.providerId) {
+        await ProviderLiveStatus.findOneAndUpdate(
+          { providerId: job.providerId },
+          { isAvailable: true, currentBookingId: null }
+        );
+      }
+    }
+    else {
+      return res.status(400).json({ error: 'Invalid status or action for customer' });
+    }
+
+    const job = await Job.findOneAndUpdate(
+      { bookingId, customerId },
+      updateData,
+      { new: true }
+    );
+
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Job updated successfully`,
+      status: job.status
+    });
+
+  } catch (error) {
+    console.error('Error updating customer job status:', error);
+    res.status(500).json({ error: error.message });
+  }
+};

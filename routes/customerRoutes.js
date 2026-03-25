@@ -17,7 +17,8 @@ import {
 
     getRouteToPickup,
     getLiveTracking,
-    getCustomerJobDetailServiceInprogress
+    getCustomerJobDetailServiceInprogress,
+    updateCustomerJobStatus
 } from '../controllers/customerController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
@@ -50,6 +51,8 @@ router.get('/:bookingId/provider-location', getProviderLocationForCustomer);
 
 // Get job status for polling
 router.get('/:bookingId/status', getJobStatusForCustomer);
+router.post('/:bookingId/status',  updateCustomerJobStatus);
+
 
 // Cancel job from customer side (after provider accepted)
 router.post('/job/cancel/:bookingId', customerCancelJob);

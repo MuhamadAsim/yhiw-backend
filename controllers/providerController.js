@@ -974,10 +974,11 @@ export const getActiveJob = async (req, res) => {
   }
 };
 
+
 export const updateJobStatus = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { status, action, timeData } = req.body;
+    const { status, action, timeData, durationSeconds, completedAt } = req.body;
     const providerId = req.user.id;
 
     const updateData = {};
@@ -985,8 +986,18 @@ export const updateJobStatus = async (req, res) => {
     if (status === 'in_progress' && action === 'start') {
       updateData.startedAt = new Date();
       updateData.status = 'in_progress';
-      updateData['timeTracking'] = { totalSeconds: 0, isPaused: false };
-    } else if (status === 'completed') {
+      updateData['timeTracking'] = { totalSeconds: 0, isPaused: false, lastUpdated: new Date() };
+    } 
+    else if (status === 'completed_provider' && action === 'complete') {
+      updateData.status = 'completed_provider';
+      updateData.completedAt = completedAt ? new Date(completedAt) : new Date();
+      updateData['timeTracking.totalSeconds'] = durationSeconds;
+      updateData['timeTracking.isPaused'] = false;
+      updateData['timeTracking.lastUpdated'] = new Date();
+      
+      console.log(`✅ Provider completed service for booking: ${bookingId}`);
+    }
+    else if (status === 'completed') {
       updateData.completedAt = new Date();
       updateData.status = 'completed';
       
@@ -994,12 +1005,18 @@ export const updateJobStatus = async (req, res) => {
         { providerId },
         { isAvailable: true, currentBookingId: null }
       );
-    } else if (action === 'pause') {
+    }
+    else if (action === 'pause') {
       updateData['timeTracking.isPaused'] = true;
       updateData['timeTracking.pausedAt'] = new Date();
-    } else if (action === 'resume') {
+      updateData['timeTracking.lastUpdated'] = new Date();
+    } 
+    else if (action === 'resume') {
       updateData['timeTracking.isPaused'] = false;
-    } else if (action === 'add_time' && timeData) {
+      updateData['timeTracking.pausedAt'] = null;
+      updateData['timeTracking.lastUpdated'] = new Date();
+    } 
+    else if (action === 'add_time' && timeData) {
       updateData.$push = { 
         'timeTracking.timeExtensions': {
           minutes: timeData.minutes,
@@ -1007,6 +1024,7 @@ export const updateJobStatus = async (req, res) => {
           requestedAt: new Date()
         }
       };
+      updateData['timeTracking.lastUpdated'] = new Date();
     }
 
     const job = await Job.findOneAndUpdate(
@@ -1573,7 +1591,7 @@ export const cancelJobByProvider = async (req, res) => {
 
 /**
  * Get job status for provider
- * Endpoint: GET /api/provider/:bookingId/status
+ * Endpoint: GET /api/provider/job/:bookingId/status
  */
 export const getJobStatusForProvider = async (req, res) => {
   try {
