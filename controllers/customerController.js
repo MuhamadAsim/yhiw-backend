@@ -1290,7 +1290,7 @@ export const getCustomerJobDetailServiceInprogress = async (req, res) => {
 
 /**
  * Update job status from customer side
- * Endpoint: PATCH /api/customer/:bookingId/status
+ * Endpoint: POST /api/customer/:bookingId/status
  */
 export const updateCustomerJobStatus = async (req, res) => {
   try {

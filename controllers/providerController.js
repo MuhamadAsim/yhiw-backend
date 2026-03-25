@@ -1150,7 +1150,7 @@ export const completeService = async (req, res) => {
     const job = await Job.findOne({ 
       bookingId, 
       providerId,
-      status: { $in: ['accepted', 'in_progress'] }
+      status: { $in: ['completed_confirmed'] }
     });
     
     if (!job) {
