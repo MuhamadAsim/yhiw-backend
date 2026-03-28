@@ -569,9 +569,6 @@ export const getJobDetails = async (req, res) => {
 
 
 
-
-
-
 /**
  * Rate a completed job
  * POST /api/customer/job/:bookingId/rate
@@ -590,11 +587,11 @@ export const rateCompletedJob = async (req, res) => {
       });
     }
 
-    // Find the job - must belong to this customer and be completed
+    // Find the job - must belong to this customer and be completed or completed_confirmed
     const job = await Job.findOne({
       bookingId,
       customerId,
-      status: 'completed' // Only allow rating completed jobs
+      status: { $in: ['completed', 'completed_confirmed'] }
     });
 
     if (!job) {
@@ -626,7 +623,7 @@ export const rateCompletedJob = async (req, res) => {
       // Get all completed jobs for this provider with ratings
       const providerJobs = await Job.find({
         providerId: job.providerId,
-        status: 'completed',
+        status: { $in: ['completed', 'completed_confirmed'] },
         'customerRating.rating': { $exists: true }
       });
 
