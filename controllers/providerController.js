@@ -1587,8 +1587,6 @@ export const cancelJobByProvider = async (req, res) => {
 
 
 
-
-
 /**
  * Get job status for provider
  * Endpoint: GET /api/provider/job/:bookingId/status
@@ -1598,18 +1596,18 @@ export const getJobStatusForProvider = async (req, res) => {
     const { bookingId } = req.params;
     const providerId = req.user.userId;
 
-    // Find the job and select only necessary fields for status check
-    const job = await Job.findOne({ 
+    const job = await Job.findOne({
       bookingId,
-      providerId // Ensure this provider is assigned
+      providerId
     }).select({
       bookingId: 1,
       status: 1,
       cancelledAt: 1,
       cancelledBy: 1,
+      cancellationReason: 1,
       startedAt: 1,
       completedAt: 1,
-      'issues': { $slice: -1 }, // Only get latest issue if any
+      'issues': { $slice: -1 },
       'timeTracking.isPaused': 1
     });
 
@@ -1620,7 +1618,6 @@ export const getJobStatusForProvider = async (req, res) => {
       });
     }
 
-    // Prepare response with relevant status info
     const response = {
       success: true,
       bookingId: job.bookingId,
@@ -1628,36 +1625,66 @@ export const getJobStatusForProvider = async (req, res) => {
       timestamp: new Date().toISOString()
     };
 
-    // Add cancellation info if job is cancelled
-    if (job.status === 'cancelled') {
-      response.cancellationInfo = {
-        cancelledAt: job.cancelledAt,
-        cancelledBy: job.cancelledBy,
-        reason: job.cancellationReason || 'No reason provided'
-      };
+    // ✅ Handle ALL statuses properly
+    switch (job.status) {
+
+      case 'accepted':
+        response.acceptedInfo = {
+          message: 'Job accepted, waiting to start'
+        };
+        break;
+
+      case 'in_progress':
+        response.progressInfo = {
+          startedAt: job.startedAt,
+          isPaused: job.timeTracking?.isPaused || false
+        };
+        break;
+
+      case 'completed':
+        response.completionInfo = {
+          completedAt: job.completedAt,
+          message: 'Job marked completed'
+        };
+        break;
+
+      case 'completed_provider':
+        response.completionInfo = {
+          completedAt: job.completedAt,
+          message: 'Completed by provider, awaiting customer confirmation'
+        };
+        break;
+
+      case 'completed_confirmed':
+        response.completionInfo = {
+          completedAt: job.completedAt,
+          message: 'Job fully completed and confirmed'
+        };
+        break;
+
+      case 'cancelled':
+        response.cancellationInfo = {
+          cancelledAt: job.cancelledAt,
+          cancelledBy: job.cancelledBy,
+          reason: job.cancellationReason || 'No reason provided'
+        };
+        break;
+
+      default:
+        response.info = {
+          message: 'Unknown job status'
+        };
     }
 
-    // Add in-progress info if applicable
-    if (job.status === 'in_progress') {
-      response.progressInfo = {
-        startedAt: job.startedAt,
-        isPaused: job.timeTracking?.isPaused || false
-      };
-    }
-
-    // Add completed info if applicable
-    if (job.status === 'completed') {
-      response.completionInfo = {
-        completedAt: job.completedAt
-      };
-    }
-
-    // If there's a recent issue, include it
+    // ✅ Recent issue (last 24h)
     if (job.issues && job.issues.length > 0) {
       const latestIssue = job.issues[job.issues.length - 1];
-      if (latestIssue && latestIssue.reportedAt) {
-        const hoursSinceIssue = (Date.now() - new Date(latestIssue.reportedAt).getTime()) / (1000 * 60 * 60);
-        // Only include issues from last 24 hours
+
+      if (latestIssue?.reportedAt) {
+        const hoursSinceIssue =
+          (Date.now() - new Date(latestIssue.reportedAt).getTime()) /
+          (1000 * 60 * 60);
+
         if (hoursSinceIssue < 24) {
           response.recentIssue = {
             type: latestIssue.type,
