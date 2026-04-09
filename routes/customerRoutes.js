@@ -18,7 +18,8 @@ import {
     getRouteToPickup,
     getLiveTracking,
     getCustomerJobDetailServiceInprogress,
-    updateCustomerJobStatus
+    updateCustomerJobStatus,
+    getCurrentBooking
 } from '../controllers/customerController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
@@ -59,6 +60,8 @@ router.post('/job/cancel/:bookingId', customerCancelJob);
 
 router.get('/:bookingId/route',  getRouteToPickup);
 router.get('/:bookingId/live-tracking',  getLiveTracking);
+
+router.get('/:userId/current-booking', getCurrentBooking);
 
 
 export default router;

@@ -80,8 +80,18 @@ const userSchema = new mongoose.Schema({
   profileImage: String,
   status: {
     type: String,
-    enum: ['active', 'inactive'],
+    enum: ['active', 'inactive', 'suspended'],
     default: 'active'
+  },
+
+  currentServiceId: {
+    type: String,
+    default: null
+  },
+
+  pushToken: {
+    type: String,
+    default: null,
   },
   // Saved locations array
   savedLocations: [savedLocationSchema],
@@ -96,7 +106,7 @@ const userSchema = new mongoose.Schema({
 
   // Professional Info
   serviceType: {
-    type: [String], 
+    type: [String],
     enum: [
       'Towing',
       'Roadside Assistance',

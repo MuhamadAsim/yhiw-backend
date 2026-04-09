@@ -15,6 +15,10 @@ import customerRoutes from "./routes/customerRoutes.js";
 import providerRoutes from "./routes/providerRoutes.js";
 import jobRoutes from "./routes/jobRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
+import scheduleRoutes from './routes/scheduleRoutes.js';
+
+
 
 
 
@@ -23,6 +27,10 @@ app.use("/api/customer", customerRoutes);
 app.use("/api/provider", providerRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use('/api/schedule', scheduleRoutes);
+
+
 
 /* -------------------- Health Check -------------------- */
 app.get("/health", (req, res) => {

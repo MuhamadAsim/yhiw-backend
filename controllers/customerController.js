@@ -1377,3 +1377,60 @@ export const updateCustomerJobStatus = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export const getCurrentBooking = async (req, res) => {
+  try {
+    const { userId } = req.params; // this is MongoDB _id
+
+    const user = await User.findById(userId).select('currentServiceId');
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (!user.currentServiceId) {
+      return res.status(200).json({ success: true, data: { currentServiceId: null } });
+    }
+
+    // Optionally fetch the job status too so frontend gets everything in one call
+    const job = await Job.findById(user.currentServiceId).select('status cancelledBy cancellationReason startedAt completedAt');
+
+    if (!job) {
+      // Job doesn't exist anymore - clean up the reference
+      await User.findByIdAndUpdate(userId, { currentServiceId: null });
+      return res.status(200).json({ success: true, data: { currentServiceId: null } });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        currentServiceId: user.currentServiceId,
+        status: job.status,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        cancelledBy: job.cancelledBy,
+        cancellationReason: job.cancellationReason,
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching current booking:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
