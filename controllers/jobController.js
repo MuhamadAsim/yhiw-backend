@@ -12,11 +12,10 @@ export const createJobNotification = async (req, res) => {
     console.log('📥 Received Request Body:', JSON.stringify(req.body, null, 2));
     console.log('👤 User ID:', req.user.id);
 
-    // Get the nested data structure from frontend
     const {
       bookingId,
-      pickup,           // <-- This is an object { address, coordinates }
-      dropoff,          // <-- This is an object { address, coordinates }
+      pickup,
+      dropoff,
       serviceId,
       serviceName,
       servicePrice,
@@ -24,166 +23,134 @@ export const createJobNotification = async (req, res) => {
       isCarRental,
       isFuelDelivery,
       isSpareParts,
-      vehicle,          // <-- This is an object { type, makeModel, year, color, licensePlate }
-      customer,         // <-- This is an object { name, phone, email, emergencyContact }
-      carRental,        // <-- Optional object
-      fuelDelivery,     // <-- Optional object
-      spareParts,       // <-- Optional object
-      additionalDetails,// <-- Object with urgency, issues, description, photos
-      schedule,         // <-- Object with type, scheduledDateTime
-      payment,          // <-- Object with totalAmount, selectedTip
-      locationSkipped,
-      timestamp,
-      platform,
-      version
+      vehicle,
+      customer,
+      carRental,
+      fuelDelivery,
+      spareParts,
+      additionalDetails,
+      schedule,
+      payment
     } = req.body;
 
-    // Log extracted values
-    console.log('\n📦 EXTRACTED VALUES:');
-    console.log('  bookingId:', bookingId);
-    console.log('  serviceId:', serviceId);
-    console.log('  serviceName:', serviceName);
-    console.log('  servicePrice:', servicePrice);
-    console.log('  serviceCategory:', serviceCategory);
+    // ✅ Extract schedule info
+    const serviceTime = schedule?.type || 'right_now';
+    const isScheduled = serviceTime === 'schedule_later';
 
-    console.log('\n📍 PICKUP DATA:');
-    console.log('  pickup:', pickup);
+    let scheduledAt = null;
 
-    console.log('\n🚗 VEHICLE DATA (RAW):');
-    console.log('  vehicle:', vehicle);
-    console.log('  vehicle.type:', vehicle?.type);
-    console.log('  vehicle.makeModel:', vehicle?.makeModel);
-    console.log('  vehicle.year:', vehicle?.year);
-    console.log('  vehicle.color:', vehicle?.color);
-    console.log('  vehicle.licensePlate:', vehicle?.licensePlate);
+    if (isScheduled && schedule?.scheduledDateTime) {
+      const { date, timeSlot } = schedule.scheduledDateTime;
 
-    console.log('\n👤 CUSTOMER DATA:');
-    console.log('  customer:', customer);
+      // Combine date + timeSlot into ONE Date
+      scheduledAt = new Date(`${date} ${timeSlot}`);
+    }
 
-    console.log('\n💰 PAYMENT DATA:');
-    console.log('  payment:', payment);
-
-    console.log('\n🔧 ADDITIONAL DETAILS:');
-    console.log('  additionalDetails:', additionalDetails);
+    console.log('\n📅 SCHEDULE INFO:');
+    console.log('  serviceTime:', serviceTime);
+    console.log('  isScheduled:', isScheduled);
+    console.log('  scheduledAt:', scheduledAt);
 
     // Check if notification already exists
-    console.log('\n🔍 Checking for existing notification with bookingId:', bookingId);
     const existing = await Notification.findOne({ bookingId });
     if (existing) {
       console.log('❌ Booking already exists:', bookingId);
       return res.status(400).json({ error: 'Booking already exists' });
     }
-    console.log('✅ No existing notification found');
 
-    // ✅ FIXED: Prepare vehicle data with vehicleType instead of nested type
+    // Prepare vehicle data
     const vehicleData = {
-      vehicleType: vehicle?.type || '',  // Map frontend 'type' to 'vehicleType'
+      vehicleType: vehicle?.type || '',
       makeModel: vehicle?.makeModel || '',
       year: vehicle?.year || '',
       color: vehicle?.color || '',
       licensePlate: vehicle?.licensePlate || ''
     };
-    console.log('\n🔄 PREPARED VEHICLE DATA (for schema):');
-    console.log('  vehicleData:', JSON.stringify(vehicleData, null, 2));
 
-    // Prepare notification data
+    // ✅ Prepare notification data
     const notificationData = {
       bookingId,
       customerId: req.user.id,
-
-      // Service info
       serviceId,
       serviceName,
-      servicePrice,
+      servicePrice: parseFloat(servicePrice) || 0,
       serviceCategory,
-
-      // Location data
-      pickup: pickup || {
-        address: '',
-        coordinates: null
-      },
+      pickup: pickup || { address: '', coordinates: null },
       dropoff: dropoff || null,
-
-      // ✅ FIXED: Use vehicleData with vehicleType
       vehicle: vehicleData,
-
-      // Customer contact (minimal - name and phone only as per schema)
       customer: {
         name: customer?.name || '',
         phone: customer?.phone || ''
       },
-
-      // Urgency and description
       urgency: additionalDetails?.urgency || 'immediate',
       issues: additionalDetails?.issues || [],
       description: additionalDetails?.description || '',
-
-      // Payment info
       payment: payment || {
         totalAmount: 0,
         selectedTip: 0,
-        baseServiceFee: servicePrice || 0
+        baseServiceFee: parseFloat(servicePrice) || 0
       },
-
-      // Service-specific flags
       isCarRental: isCarRental || false,
       isFuelDelivery: isFuelDelivery || false,
       isSpareParts: isSpareParts || false,
-
-      // Fuel specific
       fuelType: fuelDelivery?.fuelType || null,
-
-      // Spare parts specific
       partDescription: spareParts?.partDescription || null,
-
-      // Rental specific
       hasInsurance: carRental?.hasInsurance || false,
 
-      // Status
-      status: 'pending'
+      // ✅ STATUS LOGIC FIXED
+      status: isScheduled ? 'scheduled' : 'pending',
+
+      // ✅ SCHEDULE FIELDS FIXED
+      isScheduled: isScheduled,
+      serviceTime: serviceTime,
+      scheduledAt: scheduledAt
     };
 
-    console.log('\n📦 FINAL NOTIFICATION DATA TO SAVE:');
-    console.log(JSON.stringify(notificationData, null, 2));
+    // ✅ Expiration logic (VERY IMPORTANT)
+    if (!isScheduled) {
+      notificationData.expiresAt = new Date(Date.now() + 3 * 60 * 1000);
+      console.log('⏰ Immediate service - Will expire at:', notificationData.expiresAt);
+    } else {
+      console.log('📅 Scheduled service - No expiration (handled by cron)');
+    }
 
-    // Create notification with proper nested structure
+    console.log('\n📦 FINAL NOTIFICATION DATA:', JSON.stringify(notificationData, null, 2));
+
+    // Save notification
     const notification = new Notification(notificationData);
-
-    console.log('\n💾 Attempting to save notification...');
     await notification.save();
-    console.log('✅ Notification saved successfully!');
-    console.log('🆔 Saved notification ID:', notification._id);
-    console.log('📊 Saved notification status:', notification.status);
 
-    console.log('\n📤 SENDING RESPONSE:');
-    console.log('  success: true');
-    console.log('  bookingId:', bookingId);
-    console.log('🔵 ===== CREATE JOB NOTIFICATION COMPLETED =====\n');
+    console.log('✅ Notification saved successfully!');
+    console.log('🆔 Booking ID:', notification.bookingId);
+    console.log('📊 Status:', notification.status);
+    console.log('📅 Is scheduled:', notification.isScheduled);
+
+    if (!isScheduled) {
+      console.log('⏱️ Will auto-delete at:', notification.expiresAt);
+    } else {
+      console.log('📆 Will be activated by cron at:', scheduledAt);
+    }
 
     res.status(201).json({
       success: true,
       bookingId,
-      message: 'Searching for providers...'
+      message: isScheduled
+        ? 'Service scheduled successfully'
+        : 'Searching for providers...'
     });
 
   } catch (error) {
-    console.error('\n❌❌❌ CREATE NOTIFICATION ERROR ❌❌❌');
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Full error:', error);
+    console.error('\n❌ CREATE NOTIFICATION ERROR:', error);
 
     if (error.name === 'ValidationError') {
-      console.error('\n📋 VALIDATION ERRORS:');
-      Object.keys(error.errors).forEach(field => {
-        console.error(`  ${field}:`, error.errors[field].message);
-        console.error(`    Value:`, error.errors[field].value);
-        console.error(`    Kind:`, error.errors[field].kind);
-        console.error(`    Path:`, error.errors[field].path);
-      });
+      console.error(
+        'Validation errors:',
+        Object.keys(error.errors).map(field => ({
+          field,
+          message: error.errors[field].message
+        }))
+      );
     }
-
-    console.log('\n📤 SENDING ERROR RESPONSE');
-    console.log('🔵 ===== CREATE JOB NOTIFICATION FAILED =====\n');
 
     res.status(500).json({ error: error.message });
   }

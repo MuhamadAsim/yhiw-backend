@@ -5,7 +5,10 @@ import ProviderLiveStatus from '../models/providerLiveLocationModel.js';
 import Notification from '../models/notificationModel.js';
 import mongoose from 'mongoose';
 import axios from 'axios';
+import { Expo } from "expo-server-sdk";
 
+
+const expo = new Expo();
 
 
 // Google Maps API helper (already in your code, but included for reference)
@@ -13,12 +16,12 @@ const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => 
   try {
     const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
     const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${GOOGLE_MAPS_API_KEY}`;
-    
+
     console.log(`🌐 Calling Google Maps API: ${url}`);
-    
+
     const response = await fetch(url);
     const data = await response.json();
-    
+
     if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
       return {
         distance: data.rows[0].elements[0].distance.text,
@@ -27,7 +30,7 @@ const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => 
         durationValue: data.rows[0].elements[0].duration.value
       };
     }
-    
+
     console.warn('⚠️ Google Maps API returned non-OK status:', data.status);
     return null;
   } catch (error) {
@@ -35,6 +38,10 @@ const getGoogleMapsDistance = async (originLat, originLng, destLat, destLng) => 
     return null;
   }
 };
+
+
+
+
 
 export const getAvailableJobs = async (req, res) => {
   try {
@@ -44,13 +51,16 @@ export const getAvailableJobs = async (req, res) => {
 
     // Get provider's current location for distance calculation
     const providerLocation = await ProviderLiveStatus.findOne({ providerId });
-    
+
     if (!providerLocation?.currentLocation?.coordinates) {
       console.log('⚠️ Provider location not found, cannot calculate distances');
       // Still return jobs but without distance
       const query = {
         status: 'pending',
-        createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) }
+        $or: [
+          { expiresAt: { $exists: false } },   // scheduled jobs (no TTL)
+          { expiresAt: { $gt: new Date() } }    // active immediate jobs
+        ]
       };
 
       const jobs = await Notification.find(query)
@@ -74,7 +84,10 @@ export const getAvailableJobs = async (req, res) => {
 
     const query = {
       status: 'pending',
-      createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) }
+      $or: [
+        { expiresAt: { $exists: false } },   // scheduled jobs (no TTL)
+        { expiresAt: { $gt: new Date() } }    // active immediate jobs
+      ]
     };
 
     const notifications = await Notification.find(query)
@@ -87,23 +100,23 @@ export const getAvailableJobs = async (req, res) => {
     // Enhance each job with distance and ETA using Google Maps
     const jobsWithDistance = await Promise.all(notifications.map(async (notification) => {
       const jobObj = notification.toObject();
-      
+
       // Default values
       jobObj.distance = 'Calculating...';
       jobObj.estimatedArrival = 'Calculating...';
-      
+
       // Calculate distance if we have pickup coordinates
       if (notification.pickup?.coordinates) {
         const pickupLat = notification.pickup.coordinates.lat;
         const pickupLng = notification.pickup.coordinates.lng;
-        
+
         try {
           // Get real distance from Google Maps
           const mapsData = await getGoogleMapsDistance(
             providerLat, providerLng,
             pickupLat, pickupLng
           );
-          
+
           if (mapsData) {
             jobObj.distance = mapsData.distance; // e.g., "3.2 km"
             jobObj.estimatedArrival = mapsData.duration; // e.g., "12 mins"
@@ -135,7 +148,7 @@ export const getAvailableJobs = async (req, res) => {
         jobObj.distance = 'Location unavailable';
         jobObj.estimatedArrival = 'Unknown';
       }
-      
+
       return jobObj;
     }));
 
@@ -164,16 +177,21 @@ export const getAvailableJobs = async (req, res) => {
 };
 
 
+
+
+
+
+
 // Helper function for simple distance calculation (fallback)
 function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth's radius in km
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 
@@ -186,265 +204,341 @@ function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
 
 
 
+// ─────────────────────────────────────────────
+//  Constants
+// ─────────────────────────────────────────────
+const MAX_RETRIES = 3;
+const ACTIVE_STATUSES = ['accepted', 'in_progress', 'assigned'];
 
+// ─────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────
+
+/**
+ * Maps raw vehicle data from a Notification document to the Job schema shape.
+ */
+const mapVehicleData = (vehicle = {}) => ({
+  type: vehicle.vehicleType || vehicle.type || '',
+  makeModel: vehicle.makeModel || '',
+  year: vehicle.year || '',
+  color: vehicle.color || '',
+  licensePlate: vehicle.licensePlate || ''
+});
+
+/**
+ * Builds the full bookingData sub-document from a Notification.
+ */
+const buildBookingData = (notification) => ({
+  serviceId: notification.serviceId,
+  serviceName: notification.serviceName,
+  servicePrice: notification.servicePrice,
+  serviceCategory: notification.serviceCategory,
+  pickup: notification.pickup,
+  dropoff: notification.dropoff,
+  vehicle: mapVehicleData(notification.vehicle),
+  customer: {
+    name: notification.customer.name,
+    phone: notification.customer.phone,
+    email: notification.customer?.email || ''
+  },
+  urgency: notification.urgency,
+  issues: notification.issues,
+  description: notification.description,
+  payment: notification.payment,
+  isCarRental: notification.isCarRental,
+  isFuelDelivery: notification.isFuelDelivery,
+  isSpareParts: notification.isSpareParts,
+  fuelType: notification.fuelType,
+  partDescription: notification.partDescription,
+  hasInsurance: notification.hasInsurance
+});
+
+/**
+ * Attempts to resolve an ETA string using Google Maps.
+ * Falls back to a default string on any failure.
+ */
+const resolveETA = async (providerId, pickupCoordinates) => {
+  const DEFAULT_ETA = '5-10 minutes';
+
+  try {
+    const providerStatus = await ProviderLiveStatus.findOne({ providerId });
+
+    if (!providerStatus?.currentLocation?.coordinates || !pickupCoordinates) {
+      return DEFAULT_ETA;
+    }
+
+    const [providerLng, providerLat] = providerStatus.currentLocation.coordinates;
+    const { lat: pickupLat, lng: pickupLng } = pickupCoordinates;
+
+    const mapsData = await getGoogleMapsDistance(
+      providerLat, providerLng,
+      pickupLat, pickupLng
+    );
+
+    if (mapsData?.duration) {
+      console.log(`📍 Google Maps ETA: ${mapsData.duration}`);
+      return mapsData.duration;
+    }
+  } catch (err) {
+    console.warn(`⚠️  ETA calculation failed: ${err.message}`);
+  }
+
+  return DEFAULT_ETA;
+};
+
+// ─────────────────────────────────────────────
+//  Transaction body  (runs inside retry loop)
+// ─────────────────────────────────────────────
+
+/**
+ * Executes all transactional work for accepting a job.
+ * Returns the created Job document and the Notification document on success,
+ * or throws / returns an early-exit response descriptor on failure.
+ *
+ * @returns {{ earlyResponse?: object, job?: object, notification?: object }}
+ */
+const runAcceptJobTransaction = async (bookingId, providerId) => {
+  const session = await mongoose.startSession();
+
+  try {
+    session.startTransaction();
+
+    // ── SECTION 1: Duplicate-accept guard ──────────────────────────────────
+    // If this exact provider already owns this booking, return it immediately.
+    const existingProviderJob = await Job.findOne({
+      bookingId,
+      providerId,
+      status: { $in: ACTIVE_STATUSES }
+    }).session(session);
+
+    if (existingProviderJob) {
+      console.log(`✅ Job already accepted by this provider: ${bookingId}`);
+
+      const customer = await User.findById(existingProviderJob.customerId).session(session);
+      await session.commitTransaction();
+
+      return {
+        earlyResponse: {
+          status: 200,
+          body: {
+            success: true,
+            message: 'Job already accepted',
+            job: {
+              bookingId: existingProviderJob.bookingId,
+              customer: {
+                name: customer?.fullName || existingProviderJob.bookingData?.customer?.name,
+                phone: customer?.phoneNumber || existingProviderJob.bookingData?.customer?.phone,
+                location: existingProviderJob.bookingData?.pickup?.address
+              },
+              estimatedArrival: '5-10 minutes'
+            }
+          }
+        }
+      };
+    }
+
+    // ── SECTION 2: Provider active-job check ───────────────────────────────
+    const providerActiveJob = await Job.findOne({
+      providerId,
+      bookingId: { $ne: bookingId },
+      status: { $in: ACTIVE_STATUSES }
+    }).session(session);
+
+    if (providerActiveJob) {
+      console.log(`❌ Provider already has an active job: ${providerActiveJob.bookingId}`);
+      await session.abortTransaction();
+
+      return {
+        earlyResponse: {
+          status: 400,
+          body: {
+            error: 'Already on a job',
+            message: 'You already have an active job. Complete it first.'
+          }
+        }
+      };
+    }
+
+    // ── SECTION 3: Customer active-job check ───────────────────────────────
+    // Resolve the customerId first via the notification (read-only, no status change yet).
+    const notificationPrecheck = await Notification.findOne({ bookingId }).session(session);
+
+    if (notificationPrecheck?.customerId) {
+      const customerActiveJob = await Job.findOne({
+        customerId: notificationPrecheck.customerId,
+        status: { $in: ACTIVE_STATUSES }
+      }).session(session);
+
+      if (customerActiveJob) {
+        console.log(`❌ Customer already has an active job: ${customerActiveJob.bookingId}`);
+        await session.abortTransaction();
+
+        return {
+          earlyResponse: {
+            status: 409,
+            body: {
+              error: 'Customer on a job',
+              message: 'This customer already has an active job in progress.'
+            }
+          }
+        };
+      }
+    }
+
+    // ── SECTION 4: Race-condition-safe job claim ───────────────────────────
+    // Atomically transition notification from 'pending' → 'accepted'.
+    const notification = await Notification.findOneAndUpdate(
+      { bookingId, status: 'pending' },
+      {
+        $set: {
+          status: 'accepted',
+          acceptedBy: providerId,
+          acceptedAt: new Date()
+        }
+      },
+      { new: true, session }
+    );
+
+    if (!notification) {
+      // Inspect existing record to return the most precise error.
+      const staleNotification = await Notification.findOne({ bookingId }).session(session);
+      await session.abortTransaction();
+
+      if (!staleNotification) {
+        console.log(`❌ Notification not found: ${bookingId}`);
+        return {
+          earlyResponse: {
+            status: 404,
+            body: { error: 'Job not found', message: 'This job has expired or is no longer available.' }
+          }
+        };
+      }
+
+      if (staleNotification.status === 'accepted') {
+        console.log(`❌ Notification already accepted by another provider`);
+        return {
+          earlyResponse: {
+            status: 409,
+            body: { error: 'Job taken', message: 'This job has already been accepted by another provider.' }
+          }
+        };
+      }
+
+      console.log(`❌ Notification not in pending status: ${staleNotification.status}`);
+      return {
+        earlyResponse: {
+          status: 404,
+          body: { error: 'Job not available', message: 'This job is no longer available.' }
+        }
+      };
+    }
+
+    console.log(`✅ Notification claimed — Customer: ${notification.customerId}, Service: ${notification.serviceName}`);
+    console.log(`🔄 Vehicle mapping — From:`, notification.vehicle, '→ To:', mapVehicleData(notification.vehicle));
+
+    // ── SECTION 5: Provider existence guard ───────────────────────────────
+    const provider = await User.findById(providerId).session(session);
+    if (!provider) {
+      console.log(`❌ Provider not found: ${providerId}`);
+      await session.abortTransaction();
+
+      return {
+        earlyResponse: {
+          status: 404,
+          body: { error: 'Provider not found', message: 'Provider account could not be located.' }
+        }
+      };
+    }
+
+    console.log(`✅ Provider verified: ${provider.fullName}`);
+
+    // ── SECTION 6: Job creation ────────────────────────────────────────────
+    const job = new Job({
+      bookingId: notification.bookingId,
+      customerId: notification.customerId,
+      providerId,
+      bookingData: buildBookingData(notification),
+      status: 'accepted',
+      acceptedAt: new Date(),
+      timeTracking: {
+        totalSeconds: 0,
+        isPaused: true,
+        startedAt: null,
+        pausedAt: new Date(),
+        timeExtensions: []
+      }
+    });
+
+    await job.save({ session });
+    console.log(`✅ Job document created: ${job._id}`);
+
+    // ── SECTION 7: Provider live-status update ────────────────────────────
+    await ProviderLiveStatus.findOneAndUpdate(
+      { providerId },
+      {
+        currentBookingId: bookingId,
+        isAvailable: false,
+        lastSeen: new Date(),
+        currentJobStatus: 'accepted'
+      },
+      { session, upsert: true }
+    );
+    console.log(`✅ ProviderLiveStatus updated — provider now unavailable`);
+
+    // ── Commit ─────────────────────────────────────────────────────────────
+    await session.commitTransaction();
+    console.log(`✅ Transaction committed`);
+
+    return { job, notification };
+
+  } catch (err) {
+    await session.abortTransaction();
+    throw err;
+  } finally {
+    session.endSession();
+  }
+};
+
+
+
+
+
+
+// ─────────────────────────────────────────────
+//  Controller
+// ─────────────────────────────────────────────
 
 export const acceptJob = async (req, res) => {
-  const MAX_RETRIES = 3;
+  const { bookingId } = req.params;
+  const providerId = req.user.id;
+
   let retryCount = 0;
-  
+
   while (retryCount < MAX_RETRIES) {
-    const session = await mongoose.startSession();
-    
+    console.log(`\n🔵 ===== ACCEPT JOB (Attempt ${retryCount + 1}/${MAX_RETRIES}) =====`);
+    console.log(`📦 Booking: ${bookingId} | 👤 Provider: ${providerId}`);
+
     try {
-      session.startTransaction();
-      const { bookingId } = req.params;
-      const providerId = req.user.id;
+      const result = await runAcceptJobTransaction(bookingId, providerId);
 
-      console.log(`\n🔵 ===== ACCEPT JOB STARTED (Attempt ${retryCount + 1}/${MAX_RETRIES}) =====`);
-      console.log(`📦 Booking ID: ${bookingId}`);
-      console.log(`👤 Provider ID: ${providerId}`);
-
-      // ✅ CHECK 1: First, check if this provider already has this job accepted
-      const existingJobForProvider = await Job.findOne({
-        bookingId,
-        providerId,
-        status: { $in: ['accepted', 'in_progress', 'assigned'] }
-      }).session(session);
-
-      if (existingJobForProvider) {
-        console.log(`✅ Job already accepted by this provider: ${bookingId}`);
-        
-        const customer = await User.findById(existingJobForProvider.customerId).session(session);
-        
-        await session.commitTransaction();
-        session.endSession();
-        
-        return res.json({
-          success: true,
-          message: 'Job already accepted',
-          job: {
-            bookingId: existingJobForProvider.bookingId,
-            customer: {
-              name: customer?.fullName || existingJobForProvider.bookingData?.customer?.name,
-              phone: customer?.phoneNumber || existingJobForProvider.bookingData?.customer?.phone,
-              location: existingJobForProvider.bookingData?.pickup?.address
-            },
-            estimatedArrival: '5-10 minutes'
-          }
-        });
+      // ── Early-exit responses (business-rule rejections) ──────────────────
+      if (result.earlyResponse) {
+        const { status, body } = result.earlyResponse;
+        return res.status(status).json(body);
       }
 
-      // ✅ CHECK 2: Check if provider already has another active job
-      const existingOtherJob = await Job.findOne({
-        providerId,
-        bookingId: { $ne: bookingId },
-        status: { $in: ['accepted', 'in_progress', 'assigned'] }
-      }).session(session);
+      // ── Post-commit operations (outside transaction) ─────────────────────
+      const { job, notification } = result;
 
-      if (existingOtherJob) {
-        console.log(`❌ Provider already has an active job: ${existingOtherJob.bookingId}`);
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          error: 'Already on a job',
-          message: 'You already have an active job. Complete it first.'
-        });
-      }
+      const [customer, estimatedArrival] = await Promise.all([
+        User.findById(notification.customerId),
+        resolveETA(providerId, notification.pickup?.coordinates)
+      ]);
 
-      // ✅ CHECK 3: Check if job already accepted by another provider
-      const jobByOtherProvider = await Job.findOne({
-        bookingId,
-        providerId: { $ne: providerId },
-        status: { $in: ['accepted', 'in_progress', 'assigned'] }
-      }).session(session);
-
-      if (jobByOtherProvider) {
-        console.log(`❌ Job accepted by another provider: ${bookingId}`);
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(409).json({
-          error: 'Job taken',
-          message: 'This job has already been accepted by another provider'
-        });
-      }
-
-      // ✅ CHECK 4: Try to claim the notification atomically
-      const notification = await Notification.findOneAndUpdate(
-        { 
-          bookingId, 
-          status: 'pending' 
-        },
-        { 
-          $set: { 
-            status: 'accepted',
-            acceptedBy: providerId,
-            acceptedAt: new Date()
-          } 
-        },
-        { 
-          new: true,
-          session 
-        }
-      );
-
-      if (!notification) {
-        // Check if notification exists but with different status
-        const existingNotification = await Notification.findOne({ bookingId }).session(session);
-        
-        if (existingNotification) {
-          if (existingNotification.status === 'accepted') {
-            console.log(`❌ Notification already accepted by someone else`);
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(409).json({
-              error: 'Job taken',
-              message: 'This job has already been accepted by another provider'
-            });
-          } else {
-            console.log(`❌ Notification not in pending status: ${existingNotification.status}`);
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(404).json({
-              error: 'Job not available',
-              message: 'This job is no longer available'
-            });
-          }
-        }
-
-        console.log(`❌ Notification not found: ${bookingId}`);
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(404).json({
-          error: 'Job not found',
-          message: 'This job has expired or is no longer available'
-        });
-      }
-
-      console.log(`✅ Notification found and locked:`);
-      console.log(`  - Customer ID: ${notification.customerId}`);
-      console.log(`  - Service: ${notification.serviceName}`);
-
-      const provider = await User.findById(providerId).session(session);
-      if (!provider) {
-        console.log(`❌ Provider not found: ${providerId}`);
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(404).json({ error: 'Provider not found' });
-      }
-
-      console.log(`✅ Provider found: ${provider.fullName || providerId}`);
-
-      // Map vehicle correctly from Notification to Job
-      const vehicleData = {
-        type: notification.vehicle?.vehicleType || notification.vehicle?.type || '',
-        makeModel: notification.vehicle?.makeModel || '',
-        year: notification.vehicle?.year || '',
-        color: notification.vehicle?.color || '',
-        licensePlate: notification.vehicle?.licensePlate || ''
-      };
-
-      console.log(`\n🔄 Vehicle data mapping:`);
-      console.log(`  From Notification:`, JSON.stringify(notification.vehicle, null, 2));
-      console.log(`  To Job:`, JSON.stringify(vehicleData, null, 2));
-
-      // Get email from notification
-      const customerEmail = notification.customer?.email || '';
-
-      const job = new Job({
-        bookingId: notification.bookingId,
-        customerId: notification.customerId,
-        providerId: providerId,
-        bookingData: {
-          serviceId: notification.serviceId,
-          serviceName: notification.serviceName,
-          servicePrice: notification.servicePrice,
-          serviceCategory: notification.serviceCategory,
-          pickup: notification.pickup,
-          dropoff: notification.dropoff,
-          
-          vehicle: vehicleData,
-          
-          customer: {
-            name: notification.customer.name,
-            phone: notification.customer.phone,
-            email: customerEmail,
-          },
-          urgency: notification.urgency,
-          issues: notification.issues,
-          description: notification.description,
-          payment: notification.payment,
-          isCarRental: notification.isCarRental,
-          isFuelDelivery: notification.isFuelDelivery,
-          isSpareParts: notification.isSpareParts,
-          fuelType: notification.fuelType,
-          partDescription: notification.partDescription,
-          hasInsurance: notification.hasInsurance
-        },
-        status: 'accepted',
-        acceptedAt: new Date(),
-        
-        // Initialize timeTracking for the job
-        timeTracking: {
-          totalSeconds: 0,
-          isPaused: true,
-          startedAt: null,
-          pausedAt: new Date(),
-          timeExtensions: []
-        }
-      });
-
-      await job.save({ session });
-      console.log(`✅ Job created in database: ${job._id}`);
-
-      await ProviderLiveStatus.findOneAndUpdate(
-        { providerId: providerId },
-        {
-          currentBookingId: bookingId,
-          isAvailable: false,
-          lastSeen: new Date(),
-          currentJobStatus: 'accepted'
-        },
-        { session, upsert: true }
-      );
-      console.log(`✅ Provider status updated - now unavailable`);
-
-      await session.commitTransaction();
-      session.endSession();
-      console.log(`✅ Transaction committed successfully`);
-
-      const customer = await User.findById(notification.customerId);
-      
-      // Get provider location for ETA calculation
-      const providerLocation = await ProviderLiveStatus.findOne({ providerId });
-      let estimatedArrival = '5-10 minutes';
-      
-      if (providerLocation?.currentLocation?.coordinates && notification.pickup?.coordinates) {
-        try {
-          const providerLat = providerLocation.currentLocation.coordinates[1];
-          const providerLng = providerLocation.currentLocation.coordinates[0];
-          const pickupLat = notification.pickup.coordinates.lat;
-          const pickupLng = notification.pickup.coordinates.lng;
-          
-          const mapsData = await getGoogleMapsDistance(
-            providerLat, providerLng,
-            pickupLat, pickupLng
-          );
-          
-          if (mapsData) {
-            estimatedArrival = mapsData.duration;
-            console.log(`📍 Google Maps ETA: ${estimatedArrival}`);
-          }
-        } catch (mapsError) {
-          console.log(`⚠️ Failed to calculate ETA:`, mapsError.message);
-        }
-      }
-
-      console.log(`\n📤 SENDING RESPONSE:`);
-      console.log(`  success: true`);
-      console.log(`  bookingId: ${job.bookingId}`);
+      console.log(`\n📤 Sending success response — bookingId: ${job.bookingId}`);
       console.log(`🔵 ===== ACCEPT JOB COMPLETED =====\n`);
 
-      return res.json({
+      return res.status(200).json({
         success: true,
         message: 'Job accepted successfully',
         job: {
@@ -452,42 +546,42 @@ export const acceptJob = async (req, res) => {
           customer: {
             name: customer?.fullName || notification.customer.name,
             phone: customer?.phoneNumber || notification.customer.phone,
-            location: notification.pickup.address
+            location: notification.pickup?.address
           },
           estimatedArrival
         }
       });
 
-    } catch (error) {
-      await session.abortTransaction();
-      session.endSession();
-      
-      // Check if it's a write conflict and we should retry
-      if (error.codeName === 'WriteConflict' && retryCount < MAX_RETRIES - 1) {
+    } catch (err) {
+      // ── WriteConflict retry logic ────────────────────────────────────────
+      const isWriteConflict = err.codeName === 'WriteConflict';
+      const canRetry = retryCount < MAX_RETRIES - 1;
+
+      if (isWriteConflict && canRetry) {
         retryCount++;
-        console.log(`⚠️ Write conflict detected, retrying... (${retryCount}/${MAX_RETRIES})`);
-        
-        // Exponential backoff
-        const delay = Math.pow(2, retryCount) * 100;
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue; // Retry the operation
+        const backoffMs = Math.pow(2, retryCount) * 100;
+        console.warn(`⚠️  WriteConflict — retrying in ${backoffMs}ms (${retryCount}/${MAX_RETRIES})`);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        continue;
       }
-      
-      console.error('\n❌❌❌ ACCEPT JOB ERROR ❌❌❌');
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Full error:', error);
+
+      // ── Unrecoverable error ──────────────────────────────────────────────
+      console.error('\n❌ ACCEPT JOB ERROR');
+      console.error(`   Name:    ${err.name}`);
+      console.error(`   Message: ${err.message}`);
+      console.error(`   Code:    ${err.codeName}`);
+      console.error(err);
       console.log('🔵 ===== ACCEPT JOB FAILED =====\n');
-      
-      return res.status(500).json({ 
-        error: error.message,
-        code: error.codeName 
+
+      return res.status(500).json({
+        error: err.message,
+        code: err.codeName
       });
     }
   }
-  
-  // If we exit the loop, all retries failed
-  console.log(`❌ All ${MAX_RETRIES} retry attempts failed`);
+
+  // ── All retries exhausted ────────────────────────────────────────────────
+  console.error(`❌ All ${MAX_RETRIES} retry attempts exhausted for bookingId: ${bookingId}`);
   return res.status(500).json({
     error: 'Write conflict',
     message: 'Failed to accept job after multiple attempts. Please try again.'
@@ -653,12 +747,12 @@ export const getProviderInfo = async (req, res) => {
       }
     ]);
 
-    const lifetimeRating = lifetimeRatingResult.length > 0 
-      ? Math.round(lifetimeRatingResult[0].averageRating * 10) / 10 
+    const lifetimeRating = lifetimeRatingResult.length > 0
+      ? Math.round(lifetimeRatingResult[0].averageRating * 10) / 10
       : provider.rating || 4.8;
 
-    const totalReviews = lifetimeRatingResult.length > 0 
-      ? lifetimeRatingResult[0].totalReviews 
+    const totalReviews = lifetimeRatingResult.length > 0
+      ? lifetimeRatingResult[0].totalReviews
       : provider.totalReviews || 0;
 
     // ===== GET TODAY'S DATE RANGE =====
@@ -675,7 +769,7 @@ export const getProviderInfo = async (req, res) => {
     });
 
     // Calculate today's earnings
-    const todayEarnings = todayJobs.reduce((sum, job) => 
+    const todayEarnings = todayJobs.reduce((sum, job) =>
       sum + (job.bookingData?.payment?.totalAmount || 0), 0
     );
 
@@ -708,12 +802,12 @@ export const getProviderInfo = async (req, res) => {
       }
     ]);
 
-    const todayRating = todayRatingResult.length > 0 
-      ? Math.round(todayRatingResult[0].averageRating * 10) / 10 
+    const todayRating = todayRatingResult.length > 0
+      ? Math.round(todayRatingResult[0].averageRating * 10) / 10
       : 0; // Default to 0 if no ratings today
 
-    const todayReviews = todayRatingResult.length > 0 
-      ? todayRatingResult[0].todayReviews 
+    const todayReviews = todayRatingResult.length > 0
+      ? todayRatingResult[0].todayReviews
       : 0;
 
     // ===== GET RECENT JOBS =====
@@ -721,9 +815,9 @@ export const getProviderInfo = async (req, res) => {
       providerId,
       status: { $in: ['completed', 'completed_confirmed'] }
     })
-    .sort({ completedAt: -1 })
-    .limit(5)
-    .lean();
+      .sort({ completedAt: -1 })
+      .limit(5)
+      .lean();
 
     const formattedRecentJobs = recentJobs.map(job => {
       const completedDate = job.completedAt || job.updatedAt;
@@ -783,7 +877,7 @@ export const getProviderInfo = async (req, res) => {
 
   } catch (error) {
     console.error('Get performance error:', error);
-    
+
     // Return default values with proper structure
     res.json({
       success: true,
@@ -804,7 +898,7 @@ export const getProviderInfo = async (req, res) => {
           earnings: 0,
           jobs: 0,
           hours: 0,
-          rating: 0, 
+          rating: 0,
           reviews: 0,
         },
         recentJobs: []
@@ -834,7 +928,7 @@ export const getRecentJobs = async (req, res) => {
       const now = new Date();
       const diffMs = now - new Date(date);
       const diffMins = Math.floor(diffMs / (1000 * 60));
-      
+
       if (diffMins < 60) return `${diffMins} min ago`;
       if (diffMins < 1440) return `${Math.floor(diffMins / 60)} hours ago`;
       return `${Math.floor(diffMins / 1440)} days ago`;
@@ -903,15 +997,15 @@ export const getActiveJob = async (req, res) => {
     const providerId = req.user.id;
     const { bookingId } = req.params;
 
-    const job = await Job.findOne({ 
-      bookingId, 
+    const job = await Job.findOne({
+      bookingId,
       providerId,
       status: { $in: ['accepted', 'in_progress'] }
     }).populate('customerId', 'fullName phoneNumber');
 
     if (!job) {
-      return res.status(404).json({ 
-        error: 'Active job not found' 
+      return res.status(404).json({
+        error: 'Active job not found'
       });
     }
 
@@ -919,18 +1013,18 @@ export const getActiveJob = async (req, res) => {
     let remainingEta = null;
     if (job.status === 'accepted') {
       const providerLocation = await ProviderLiveStatus.findOne({ providerId });
-      
+
       if (providerLocation?.currentLocation?.coordinates && job.bookingData?.pickup?.coordinates) {
         const providerLat = providerLocation.currentLocation.coordinates[1];
         const providerLng = providerLocation.currentLocation.coordinates[0];
         const pickupLat = job.bookingData.pickup.coordinates.lat;
         const pickupLng = job.bookingData.pickup.coordinates.lng;
-        
+
         const mapsData = await getGoogleMapsDistance(
           providerLat, providerLng,
           pickupLat, pickupLng
         );
-        
+
         if (mapsData) {
           remainingEta = mapsData.duration;
         }
@@ -963,9 +1057,9 @@ export const getActiveJob = async (req, res) => {
       ]
     };
 
-    res.json({ 
-      success: true, 
-      job: jobDetails 
+    res.json({
+      success: true,
+      job: jobDetails
     });
 
   } catch (error) {
@@ -975,6 +1069,9 @@ export const getActiveJob = async (req, res) => {
 };
 
 
+
+
+
 export const updateJobStatus = async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -982,42 +1079,51 @@ export const updateJobStatus = async (req, res) => {
     const providerId = req.user.id;
 
     const updateData = {};
-    
+
     if (status === 'in_progress' && action === 'start') {
       updateData.startedAt = new Date();
       updateData.status = 'in_progress';
       updateData['timeTracking'] = { totalSeconds: 0, isPaused: false, lastUpdated: new Date() };
-    } 
+    }
     else if (status === 'completed_provider' && action === 'complete') {
       updateData.status = 'completed_provider';
       updateData.completedAt = completedAt ? new Date(completedAt) : new Date();
       updateData['timeTracking.totalSeconds'] = durationSeconds;
       updateData['timeTracking.isPaused'] = false;
       updateData['timeTracking.lastUpdated'] = new Date();
-      
+
       console.log(`✅ Provider completed service for booking: ${bookingId}`);
     }
     else if (status === 'completed') {
       updateData.completedAt = new Date();
       updateData.status = 'completed';
-      
-      await ProviderLiveStatus.findOneAndUpdate(
-        { providerId },
-        { isAvailable: true, currentBookingId: null }
-      );
+
+      // Fetch job first to get customerId
+      const existingJob = await Job.findOne({ bookingId, providerId });
+
+      await Promise.all([
+        ProviderLiveStatus.findOneAndUpdate(
+          { providerId },
+          { isAvailable: true, currentBookingId: null }
+        ),
+        User.findByIdAndUpdate(providerId, { currentServiceId: null }),
+        ...(existingJob?.customerId
+          ? [User.findByIdAndUpdate(existingJob.customerId, { currentServiceId: null })]
+          : [])
+      ]);
     }
     else if (action === 'pause') {
       updateData['timeTracking.isPaused'] = true;
       updateData['timeTracking.pausedAt'] = new Date();
       updateData['timeTracking.lastUpdated'] = new Date();
-    } 
+    }
     else if (action === 'resume') {
       updateData['timeTracking.isPaused'] = false;
       updateData['timeTracking.pausedAt'] = null;
       updateData['timeTracking.lastUpdated'] = new Date();
-    } 
+    }
     else if (action === 'add_time' && timeData) {
-      updateData.$push = { 
+      updateData.$push = {
         'timeTracking.timeExtensions': {
           minutes: timeData.minutes,
           reason: timeData.reason,
@@ -1037,8 +1143,8 @@ export const updateJobStatus = async (req, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: `Job updated successfully`,
       status: job.status,
       timeTracking: job.timeTracking
@@ -1057,13 +1163,13 @@ export const uploadServicePhoto = async (req, res) => {
     const { photoType, description } = req.body;
 
     const job = await Job.findOne({ bookingId, providerId });
-    
+
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
     if (!job.photos) job.photos = [];
-    
+
     job.photos.push({
       type: photoType || 'during-service',
       url: req.file?.path || 'temp-photo-url',
@@ -1073,8 +1179,8 @@ export const uploadServicePhoto = async (req, res) => {
 
     await job.save();
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Photo uploaded successfully',
       photos: job.photos
     });
@@ -1092,13 +1198,13 @@ export const reportServiceIssue = async (req, res) => {
     const { issueType, description, severity } = req.body;
 
     const job = await Job.findOne({ bookingId, providerId });
-    
+
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
     if (!job.issues) job.issues = [];
-    
+
     const newIssue = {
       type: issueType,
       description,
@@ -1111,8 +1217,8 @@ export const reportServiceIssue = async (req, res) => {
     job.issues.push(newIssue);
     await job.save();
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Issue reported successfully',
       issue: newIssue
     });
@@ -1128,12 +1234,11 @@ export const reportServiceIssue = async (req, res) => {
 
 
 
-
 export const completeService = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const providerId = req.user.id;
-    const { 
+    const {
       completionNotes,
       checklistCompleted,
       issuesFound,
@@ -1146,29 +1251,25 @@ export const completeService = async (req, res) => {
 
     console.log('🔍 Completing service:', { bookingId, providerId });
 
-    // Find the job
-    const job = await Job.findOne({ 
-      bookingId, 
+    const job = await Job.findOne({
+      bookingId,
       providerId,
       status: { $in: ['completed_confirmed'] }
     });
-    
+
     if (!job) {
-      return res.status(404).json({ 
-        error: 'Job not found or already completed'
-      });
+      return res.status(404).json({ error: 'Job not found or already completed' });
     }
 
     // Calculate earnings
-    let finalEarnings = job.bookingData?.payment?.totalAmount || 0;
-    let platformFee = finalEarnings * 0.15;
-    let providerEarnings = finalEarnings - platformFee;
+    const finalEarnings   = job.bookingData?.payment?.totalAmount || 0;
+    const platformFee     = finalEarnings * 0.15;
+    const providerEarnings = finalEarnings - platformFee;
 
-    // Update job with completion details
-    job.status = 'completed';
+    // Update job fields
+    job.status      = 'completed';
     job.completedAt = new Date();
-    
-    // Update time tracking
+
     if (timeTracking || durationSeconds) {
       job.timeTracking = {
         ...job.timeTracking,
@@ -1178,81 +1279,81 @@ export const completeService = async (req, res) => {
       };
     }
 
-    // Add photos if provided
-    if (photos && photos.length > 0) {
+    if (photos?.length > 0) {
       job.photos = [...(job.photos || []), ...photos.map(photo => ({
-        type: photo.type || 'post-service',
-        url: photo.url,
+        type:        photo.type || 'post-service',
+        url:         photo.url,
         description: photo.description || 'Service completion photo',
-        uploadedAt: new Date()
+        uploadedAt:  new Date()
       }))];
     }
 
-    // Add completion details
     job.completionDetails = {
-      notes: completionNotes || '',
+      notes:              completionNotes || '',
       checklistCompleted: checklistCompleted || [],
-      issuesFound: issuesFound?.map(i => i.description || i) || [],
-      completedBy: providerId,
-      completedAt: new Date()
+      issuesFound:        issuesFound?.map(i => i.description || i) || [],
+      completedBy:        providerId,
+      completedAt:        new Date()
     };
 
     await job.save();
 
-    // ✅ FIX 1: Update provider's live status correctly
-    await ProviderLiveStatus.findOneAndUpdate(
-      { providerId },
-      { 
-        isAvailable: true, 
-        currentBookingId: null,
-        lastSeen: new Date()  // Using lastSeen instead of lastCompletedAt
-      }
-    );
+    // ── Side effects (all parallel) ───────────────────────────────────────
+    const [provider] = await Promise.all([
+      // Fetch provider for stats update
+      User.findById(providerId),
 
-    // ✅ FIX 2: Update provider stats in User model
-    const provider = await User.findById(providerId);
+      // Release provider live status
+      ProviderLiveStatus.findOneAndUpdate(
+        { providerId },
+        { isAvailable: true, currentBookingId: null, lastSeen: new Date() }
+      ),
+
+      // Clear currentServiceId for both provider and customer
+      User.findByIdAndUpdate(providerId,      { currentServiceId: null }),
+      User.findByIdAndUpdate(job.customerId,  { currentServiceId: null }),
+    ]);
+
+    console.log(`✅ Cleared currentServiceId — provider: ${providerId}, customer: ${job.customerId}`);
+
+    // Update provider stats
     if (provider) {
       provider.totalJobsCompleted = (provider.totalJobsCompleted || 0) + 1;
-      provider.totalEarnings = (provider.totalEarnings || 0) + providerEarnings;
+      provider.totalEarnings      = (provider.totalEarnings      || 0) + providerEarnings;
       await provider.save();
     }
 
-    // Send success response
-    res.json({ 
-      success: true, 
+    return res.json({
+      success: true,
       message: 'Service completed successfully',
       data: {
-        bookingId: job.bookingId,
-        status: job.status,
+        bookingId:   job.bookingId,
+        status:      job.status,
         completedAt: job.completedAt,
         earnings: {
-          totalAmount: finalEarnings,
-          platformFee: platformFee,
-          providerEarnings: providerEarnings
+          totalAmount:      finalEarnings,
+          platformFee,
+          providerEarnings
         },
         providerStats: {
           totalJobsCompleted: provider?.totalJobsCompleted || 0,
-          totalEarnings: provider?.totalEarnings || 0
+          totalEarnings:      provider?.totalEarnings      || 0
         }
       }
     });
 
   } catch (error) {
     console.error('❌ Complete service error:', error);
-    res.status(500).json({ 
-      error: 'Failed to complete service',
-      message: error.message
-    });
+    res.status(500).json({ error: 'Failed to complete service', message: error.message });
   }
 };
-
 
 
 
 export const getProviderTodayStats = async (req, res) => {
   try {
     const { providerId } = req.params;
-    
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -1328,10 +1429,10 @@ export const getProviderTodayStats = async (req, res) => {
         todayEarnings: todayData.totalEarnings,
         todayJobs: todayData.jobsCount,
         todayMinutes: todayData.totalMinutes,
-        
+
         // Today's jobs list
         jobsList: todayData.jobs,
-        
+
         // Overall stats from User model
         overallStats: {
           totalJobsCompleted: providerStats?.totalJobsCompleted || 0,
@@ -1344,9 +1445,9 @@ export const getProviderTodayStats = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching provider stats:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: error.message 
+      error: error.message
     });
   }
 };
@@ -1367,8 +1468,8 @@ export const getProviderActiveJob = async (req, res) => {
     console.log(`👤 Provider ID: ${providerId}`);
 
     // Find the job with proper population
-    const job = await Job.findOne({ 
-      bookingId, 
+    const job = await Job.findOne({
+      bookingId,
       providerId,
       status: { $in: ['accepted', 'in_progress'] }
     }).populate('customerId', 'fullName phoneNumber rating');
@@ -1395,30 +1496,30 @@ export const getProviderActiveJob = async (req, res) => {
 
     // Get provider's current location
     const providerStatus = await ProviderLiveStatus.findOne({ providerId });
-    
+
     // Check if we have all required coordinates
-    if (providerStatus?.currentLocation?.coordinates && 
-        job.bookingData?.pickup?.coordinates?.lat && 
-        job.bookingData?.pickup?.coordinates?.lng) {
-      
+    if (providerStatus?.currentLocation?.coordinates &&
+      job.bookingData?.pickup?.coordinates?.lat &&
+      job.bookingData?.pickup?.coordinates?.lng) {
+
       const providerLat = providerStatus.currentLocation.coordinates[1];
       const providerLng = providerStatus.currentLocation.coordinates[0];
       const pickupLat = job.bookingData.pickup.coordinates.lat;
       const pickupLng = job.bookingData.pickup.coordinates.lng;
-      
+
       // Validate coordinates
-      if (!isNaN(providerLat) && !isNaN(providerLng) && 
-          !isNaN(pickupLat) && !isNaN(pickupLng)) {
-        
+      if (!isNaN(providerLat) && !isNaN(providerLng) &&
+        !isNaN(pickupLat) && !isNaN(pickupLng)) {
+
         console.log(`📍 Calculating route from (${providerLat},${providerLng}) to (${pickupLat},${pickupLng})`);
-        
+
         try {
           // Use Google Maps helper to get fresh data
           const mapsData = await getGoogleMapsDistance(
             providerLat, providerLng,
             pickupLat, pickupLng
           );
-          
+
           if (mapsData) {
             distance = mapsData.distance;      // e.g., "5.2 km"
             eta = mapsData.duration;           // e.g., "12 mins"
@@ -1432,7 +1533,7 @@ export const getProviderActiveJob = async (req, res) => {
         } catch (googleError) {
           mapsError = googleError.message;
           console.error(`❌ Google Maps API error:`, googleError.message);
-          
+
           // Fallback to simple calculation only if Google completely fails
           const simpleDistance = calculateSimpleDistance(
             providerLat, providerLng,
@@ -1462,7 +1563,7 @@ export const getProviderActiveJob = async (req, res) => {
         customerName: customer.fullName || job.bookingData?.customer?.name || 'Customer',
         customerPhone: customer.phoneNumber || job.bookingData?.customer?.phone || '',
         customerRating: customer.rating || 4.5,
-        
+
         // Location details
         pickupLocation: job.bookingData?.pickup?.address || 'Pickup location',
         pickupLat: job.bookingData?.pickup?.coordinates?.lat || null,
@@ -1470,16 +1571,16 @@ export const getProviderActiveJob = async (req, res) => {
         dropoffLocation: job.bookingData?.dropoff?.address || null,
         dropoffLat: job.bookingData?.dropoff?.coordinates?.lat || null,
         dropoffLng: job.bookingData?.dropoff?.coordinates?.lng || null,
-        
+
         // LIVE Google Maps data (fresh every request)
         distance: distance,  // Real distance from Google Maps
         eta: eta,            // Real ETA with traffic from Google Maps
         routePolyline: routePolyline, // For drawing route on map
-        
+
         // Additional info
-        navigationTips: job.bookingData?.description || 
-                       job.bookingData?.specialInstructions || 
-                       'Call customer upon arrival.',
+        navigationTips: job.bookingData?.description ||
+          job.bookingData?.specialInstructions ||
+          'Call customer upon arrival.',
         serviceType: job.bookingData?.serviceType || 'Towing Service',
         vehicleType: job.bookingData?.vehicleType || 'Sedan',
         estimatedEarnings: job.estimatedEarnings || job.bookingData?.estimatedPrice || '0',
@@ -1492,74 +1593,66 @@ export const getProviderActiveJob = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Get provider active job error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 };
 
 
 
-
-/**
- * Cancel job (called by provider)
- * Endpoint: POST /api/provider/:bookingId/cancel
- */
 export const cancelJobByProvider = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { reason, cancellationDetails } = req.body;
-    const providerId = req.user.userId; // Assuming auth middleware sets req.user
+    const providerId = req.user.userId;
 
-    // Find the job
     const job = await Job.findOne({ bookingId });
-    
+
     if (!job) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
+      return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    // Verify this provider is assigned to the job
     if (job.providerId.toString() !== providerId) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to cancel this job'
-      });
+      return res.status(403).json({ success: false, message: 'You are not authorized to cancel this job' });
     }
 
-    // Check if job can be cancelled (only accepted or in_progress)
     if (!['accepted', 'in_progress'].includes(job.status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot cancel job with status: ${job.status}`
-      });
+      return res.status(400).json({ success: false, message: `Cannot cancel job with status: ${job.status}` });
     }
 
-    // Update job status to cancelled
-    job.status = 'cancelled';
+    job.status      = 'cancelled';
     job.cancelledAt = new Date();
     job.cancelledBy = 'provider';
 
-    // Save cancellation reason if provided
     if (reason) {
       job.cancellationReason = reason;
     }
 
-    // Add to issues if there's a specific issue
     if (cancellationDetails?.issue) {
       job.issues.push({
-        type: 'cancellation',
+        type:        'cancellation',
         description: cancellationDetails.issue,
-        severity: cancellationDetails.severity || 'medium',
-        reportedAt: new Date(),
-        status: 'open'
+        severity:    cancellationDetails.severity || 'medium',
+        reportedAt:  new Date(),
+        status:      'open'
       });
     }
 
     await job.save();
+
+    // Release provider live status + clear currentServiceId for both sides
+    await Promise.all([
+      ProviderLiveStatus.findOneAndUpdate(
+        { providerId },
+        { isAvailable: true, currentBookingId: null }
+      ),
+      User.findByIdAndUpdate(providerId,     { currentServiceId: null }),
+      User.findByIdAndUpdate(job.customerId, { currentServiceId: null }),
+    ]);
+
+    console.log(`✅ Cleared currentServiceId — provider: ${providerId}, customer: ${job.customerId}`);
 
     // TODO: Notify customer via push notification/socket
     // notifyCustomer(job.customerId, 'PROVIDER_CANCELLED', { bookingId, reason });
@@ -1568,8 +1661,8 @@ export const cancelJobByProvider = async (req, res) => {
       success: true,
       message: 'Job cancelled successfully',
       data: {
-        bookingId: job.bookingId,
-        status: job.status,
+        bookingId:   job.bookingId,
+        status:      job.status,
         cancelledAt: job.cancelledAt,
         cancelledBy: job.cancelledBy
       }
@@ -1577,11 +1670,7 @@ export const cancelJobByProvider = async (req, res) => {
 
   } catch (error) {
     console.error('Error cancelling job by provider:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to cancel job',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Failed to cancel job', error: error.message });
   }
 };
 
@@ -1741,16 +1830,16 @@ export const getProviderRoute = async (req, res) => {
 
     // Try Directions API first (this works based on your test)
     const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&key=${apiKey}&mode=driving`;
-    
+
     const directionsResponse = await axios.get(directionsUrl);
-    
+
     // If Directions API works (it did in your test)
     if (directionsResponse.data.status === 'OK' && directionsResponse.data.routes.length > 0) {
       const route = directionsResponse.data.routes[0];
       const leg = route.legs[0];
-      
+
       console.log(`✅ Directions API successful: ${leg.distance.text}, ${leg.duration.text}`);
-      
+
       // Return EXACT structure frontend expects
       return res.json({
         success: true,
@@ -1761,25 +1850,25 @@ export const getProviderRoute = async (req, res) => {
           // NO EXTRA FIELDS - frontend doesn't need them
         }
       });
-    } 
+    }
     // Fallback to Distance Matrix (also works based on your test)
     else {
       console.log(`⚠️ Directions API failed (${directionsResponse.data.status}), trying Distance Matrix...`);
-      
+
       const distanceUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${apiKey}`;
       const distanceResponse = await axios.get(distanceUrl);
-      
-      if (distanceResponse.data.status === 'OK' && 
-          distanceResponse.data.rows[0]?.elements[0]?.status === 'OK') {
-        
+
+      if (distanceResponse.data.status === 'OK' &&
+        distanceResponse.data.rows[0]?.elements[0]?.status === 'OK') {
+
         const element = distanceResponse.data.rows[0].elements[0];
-        
+
         console.log(`✅ Distance Matrix successful: ${element.distance.text}, ${element.duration.text}`);
-        
+
         // Generate a simple straight-line polyline (your decodePolyline function can handle this format)
         // Format: "lat1,lng1|lat2,lng2" - your decodePolyline will need to handle this
         const simplePolyline = `${originLat},${originLng}|${destLat},${destLng}`;
-        
+
         // Return SAME structure as above
         return res.json({
           success: true,
@@ -1794,9 +1883,9 @@ export const getProviderRoute = async (req, res) => {
         const simpleDistance = calculateSimpleDistance(originLat, originLng, destLat, destLng);
         const simpleDuration = Math.ceil(simpleDistance * 12); // Rough estimate: 12 min per km
         const simplePolyline = `${originLat},${originLng}|${destLat},${destLng}`;
-        
+
         console.log(`⚠️ Using estimated route: ${simpleDistance.toFixed(1)} km, ${simpleDuration} min`);
-        
+
         // Return SAME structure with estimated data
         return res.json({
           success: true,
@@ -1811,14 +1900,14 @@ export const getProviderRoute = async (req, res) => {
     }
   } catch (error) {
     console.error('❌ Route calculation error:', error);
-    
+
     // Even on error, try to return something usable
     try {
       const { originLat, originLng, destLat, destLng } = req.body;
       const simpleDistance = calculateSimpleDistance(originLat, originLng, destLat, destLng);
       const simpleDuration = Math.ceil(simpleDistance * 12);
       const simplePolyline = `${originLat},${originLng}|${destLat},${destLng}`;
-      
+
       return res.json({
         success: true,
         message: 'Using estimated route due to API error',
@@ -1829,8 +1918,8 @@ export const getProviderRoute = async (req, res) => {
         }
       });
     } catch (fallbackError) {
-      return res.status(500).json({ 
-        success: false, 
+      return res.status(500).json({
+        success: false,
         message: 'Failed to calculate route'
       });
     }
@@ -1838,7 +1927,7 @@ export const getProviderRoute = async (req, res) => {
 };
 
 function deg2rad(deg) {
-  return deg * (Math.PI/180);
+  return deg * (Math.PI / 180);
 }
 
 // Helper function to calculate bearing
@@ -1847,10 +1936,10 @@ function calculateBearing(lat1, lon1, lat2, lon2) {
   const φ2 = deg2rad(lat2);
   const λ1 = deg2rad(lon1);
   const λ2 = deg2rad(lon2);
-  
+
   const y = Math.sin(λ2 - λ1) * Math.cos(φ2);
   const x = Math.cos(φ1) * Math.sin(φ2) -
-            Math.sin(φ1) * Math.cos(φ2) * Math.cos(λ2 - λ1);
+    Math.sin(φ1) * Math.cos(φ2) * Math.cos(λ2 - λ1);
   const θ = Math.atan2(y, x);
   return (θ * 180 / Math.PI + 360) % 360;
 }
@@ -1864,7 +1953,7 @@ function generateSimplePolyline(lat1, lon1, lat2, lon2, numPoints = 10) {
     const lng = lon1 + (lon2 - lon1) * fraction;
     points.push([lat, lng]);
   }
-  
+
   // Encode polyline (simplified - you might want to use a library for proper encoding)
   return encodePolyline(points);
 }

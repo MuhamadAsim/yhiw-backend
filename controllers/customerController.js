@@ -620,7 +620,9 @@ export const getJobStatusForCustomer = async (req, res) => {
   }
 };
 
-// Cancel job from customer side
+
+
+
 export const customerCancelJob = async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -630,44 +632,43 @@ export const customerCancelJob = async (req, res) => {
     const job = await Job.findOne({ bookingId, customerId });
 
     if (!job) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
+      return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
     if (job.status === 'completed') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot cancel completed job'
-      });
+      return res.status(400).json({ success: false, message: 'Cannot cancel completed job' });
     }
 
-    job.status = 'cancelled';
+    job.status      = 'cancelled';
     job.cancelledAt = new Date();
     job.cancelledBy = 'customer';
+    job.cancellationReason = reason || 'Cancelled by customer';
     await job.save();
 
+    // Release provider and clear their currentServiceId
     if (job.providerId) {
-      await ProviderLiveStatus.findOneAndUpdate(
-        { providerId: job.providerId },
-        {
-          isAvailable: true,
-          currentBookingId: null
-        }
-      );
+      await Promise.all([
+        ProviderLiveStatus.findOneAndUpdate(
+          { providerId: job.providerId },
+          { isAvailable: true, currentBookingId: null }
+        ),
+        User.findByIdAndUpdate(job.providerId, { currentServiceId: null })
+      ]);
     }
 
-    res.json({
-      success: true,
-      message: 'Job cancelled successfully'
-    });
+    // Clear customer's currentServiceId so they can make new requests
+    await User.findByIdAndUpdate(customerId, { currentServiceId: null });
+
+    res.json({ success: true, message: 'Job cancelled successfully' });
 
   } catch (error) {
     console.error('Customer cancel job error:', error);
     res.status(500).json({ error: error.message });
   }
 };
+
+
+
 
 // ==================== GOOGLE MAPS HELPERS ====================
 
@@ -1288,88 +1289,98 @@ export const getCustomerJobDetailServiceInprogress = async (req, res) => {
 
 
 
-/**
- * Update job status from customer side
- * Endpoint: POST /api/customer/:bookingId/status
- */
+
 export const updateCustomerJobStatus = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { status, action, confirmedAt } = req.body;
     const customerId = req.user.id;
 
+    const existingJob = await Job.findOne({ bookingId, customerId });
+
+    if (!existingJob) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
     const updateData = {};
 
-    // Handle customer confirming completion
+    // ── Branch 1: Customer confirms provider completion ───────────────────
     if (status === 'completed_confirmed' && action === 'customer_confirm') {
-      // First check if the job is in completed_provider status
-      const existingJob = await Job.findOne({ bookingId, customerId });
-      
-      if (!existingJob) {
-        return res.status(404).json({ error: 'Job not found' });
-      }
-      
+
       if (existingJob.status !== 'completed_provider') {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Cannot confirm completion - provider has not completed the service yet',
           currentStatus: existingJob.status
         });
       }
 
-      updateData.status = 'completed_confirmed';
+      updateData.status      = 'completed_confirmed';
       updateData.completedAt = confirmedAt ? new Date(confirmedAt) : new Date();
-      
-      // Optional: Add customer confirmation notes
+
       if (req.body.confirmationNotes) {
         updateData['completionDetails.customerNotes'] = req.body.confirmationNotes;
-        updateData['completionDetails.confirmedBy'] = customerId;
-        updateData['completionDetails.confirmedAt'] = new Date();
+        updateData['completionDetails.confirmedBy']   = customerId;
+        updateData['completionDetails.confirmedAt']   = new Date();
       }
 
       console.log(`✅ Customer confirmed completion for booking: ${bookingId}`);
-      
-      // Release provider for new jobs
-      const job = await Job.findOne({ bookingId });
-      if (job && job.providerId) {
-        await ProviderLiveStatus.findOneAndUpdate(
-          { providerId: job.providerId },
-          { isAvailable: true, currentBookingId: null }
-        );
-      }
     }
+
+    // ── Branch 2: Customer cancels ────────────────────────────────────────
     else if (status === 'cancelled' && action === 'customer_cancel') {
-      updateData.status = 'cancelled';
-      updateData.cancelledAt = new Date();
-      updateData.cancelledBy = 'customer';
+
+      updateData.status             = 'cancelled';
+      updateData.cancelledAt        = new Date();
+      updateData.cancelledBy        = 'customer';
       updateData.cancellationReason = req.body.reason || 'Cancelled by customer';
-      
-      // Release provider
-      const job = await Job.findOne({ bookingId });
-      if (job && job.providerId) {
-        await ProviderLiveStatus.findOneAndUpdate(
-          { providerId: job.providerId },
-          { isAvailable: true, currentBookingId: null }
-        );
-      }
+
+      console.log(`✅ Customer cancelled booking: ${bookingId}`);
     }
+
     else {
       return res.status(400).json({ error: 'Invalid status or action for customer' });
     }
 
-    const job = await Job.findOneAndUpdate(
+    // ── Apply job update ──────────────────────────────────────────────────
+    const updatedJob = await Job.findOneAndUpdate(
       { bookingId, customerId },
       updateData,
       { new: true }
     );
 
-    if (!job) {
+    if (!updatedJob) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    res.json({ 
-      success: true, 
-      message: `Job updated successfully`,
-      status: job.status
+    // ── Post-update side effects ──────────────────────────────────────────
+
+    const sideEffects = [
+      // Always clear customer's currentServiceId
+      User.findByIdAndUpdate(customerId, { currentServiceId: null }),
+    ];
+
+    if (existingJob.providerId) {
+      sideEffects.push(
+        // Release provider's live status
+        ProviderLiveStatus.findOneAndUpdate(
+          { providerId: existingJob.providerId },
+          { isAvailable: true, currentBookingId: null }
+        ),
+        // On cancellation also clear provider's currentServiceId
+        ...(status === 'cancelled'
+          ? [User.findByIdAndUpdate(existingJob.providerId, { currentServiceId: null })]
+          : [])
+      );
+    }
+
+    await Promise.all(sideEffects);
+
+    console.log(`✅ Cleared currentServiceId — customer: ${customerId}${status === 'cancelled' ? `, provider: ${existingJob.providerId}` : ''}`);
+
+    return res.json({
+      success: true,
+      message: 'Job updated successfully',
+      status:  updatedJob.status
     });
 
   } catch (error) {
@@ -1377,10 +1388,6 @@ export const updateCustomerJobStatus = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
-
-
-
 
 
 

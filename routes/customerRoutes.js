@@ -41,7 +41,6 @@ router.get('/:userId/recent-locations', getRecentLocations);
 router.post('/:userId/recent-locations', addRecentLocation);
 
 // ==================== NEW JOB ROUTES FOR PROVIDER ASSIGNED SCREEN ====================
-// These use bookingId instead of userId since they're job-specific
 
 // Get complete job details for customer view (after provider accepted)
 router.get('/:bookingId/details', getCustomerJobDetails);
