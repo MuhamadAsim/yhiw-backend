@@ -225,6 +225,11 @@ const mapVehicleData = (vehicle = {}) => ({
   licensePlate: vehicle.licensePlate || ''
 });
 
+const hasDropoff = (dropoff) => {
+  if (!dropoff) return false;
+  return !!(dropoff.address || dropoff.coordinates?.lat || dropoff.coordinates?.lng);
+};
+
 /**
  * Builds the full bookingData sub-document from a Notification.
  */
@@ -237,9 +242,8 @@ const buildBookingData = (notification) => ({
   pickup: notification.pickup,
 
   // ✅ CRITICAL FIX: remove null dropoff safely
-  ...(notification.dropoff && Object.keys(notification.dropoff || {}).length > 0
-    ? { dropoff: notification.dropoff }
-    : {}),
+   ...(hasDropoff(notification.dropoff) ? { dropoff: notification.dropoff } : {}),
+
 
   vehicle: mapVehicleData(notification.vehicle),
 
