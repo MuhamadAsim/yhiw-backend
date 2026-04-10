@@ -334,9 +334,7 @@ export const toggleFavoriteLocation = async (req, res) => {
 };
 
 
-// ==================== JOB CONTROLLERS FOR CUSTOMER ====================
 
-// Get complete job details for customer
 export const getCustomerJobDetails = async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -344,32 +342,39 @@ export const getCustomerJobDetails = async (req, res) => {
 
     console.log(`📋 Customer fetching job details: ${bookingId}`);
 
-    const job = await Job.findOne({
-      bookingId,
-      customerId
-    }).populate('providerId', 'fullName phoneNumber profileImage rating completedJobs yearsOfExperience');
+    const job = await Job.findOne({ bookingId, customerId })
+      .populate('providerId', 'fullName phoneNumber profileImage rating totalJobsCompleted');
 
     if (!job) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
+      return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    const providerLocation = await ProviderLiveStatus.findOne({
-      providerId: job.providerId
-    });
+    // ✅ Extract ID before it gets used — populate turns it into an object
+    const rawProviderId = job.providerId._id;
+
+    console.log(`👤 Provider ID for live status lookup: ${rawProviderId}`);
+
+    const providerLocation = await ProviderLiveStatus.findOne({ providerId: rawProviderId });
+
+    console.log(`📍 Provider live location found: ${providerLocation ? 'YES' : 'NO'}`);
+    if (providerLocation) {
+      console.log(`   Coordinates: ${JSON.stringify(providerLocation.currentLocation?.coordinates)}`);
+      console.log(`   Last seen:   ${providerLocation.lastSeen}`);
+    }
 
     let estimatedArrival = '15 min';
     let distance = '2.5 km';
 
-    if (providerLocation?.currentLocation?.coordinates &&
-      job.bookingData?.pickup?.coordinates) {
-
+    if (
+      providerLocation?.currentLocation?.coordinates &&
+      job.bookingData?.pickup?.coordinates
+    ) {
       const providerLat = providerLocation.currentLocation.coordinates[1];
       const providerLng = providerLocation.currentLocation.coordinates[0];
       const pickupLat = job.bookingData.pickup.coordinates.lat;
       const pickupLng = job.bookingData.pickup.coordinates.lng;
+
+      console.log(`🗺️  Calculating distance — Provider: (${providerLat}, ${providerLng}) → Pickup: (${pickupLat}, ${pickupLng})`);
 
       try {
         const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -381,17 +386,19 @@ export const getCustomerJobDetails = async (req, res) => {
         if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
           estimatedArrival = data.rows[0].elements[0].duration.text;
           distance = data.rows[0].elements[0].distance.text;
-          console.log(`📍 Google Maps: ETA ${estimatedArrival}, Distance ${distance}`);
+          console.log(`✅ Google Maps: ETA ${estimatedArrival}, Distance ${distance}`);
+        } else {
+          console.warn(`⚠️  Google Maps bad response: ${data.status}`);
         }
       } catch (mapsError) {
-        console.error('Google Maps API error:', mapsError);
-        const simpleDistance = calculateSimpleDistance(
-          providerLat, providerLng,
-          pickupLat, pickupLng
-        );
+        console.error('❌ Google Maps API error:', mapsError.message);
+        const simpleDistance = calculateSimpleDistance(providerLat, providerLng, pickupLat, pickupLng);
         distance = `${simpleDistance.toFixed(1)} km`;
         estimatedArrival = `${Math.ceil(simpleDistance * 12)} min`;
+        console.log(`↩️  Fallback distance: ${distance}, ETA: ${estimatedArrival}`);
       }
+    } else {
+      console.warn(`⚠️  Skipping distance calc — providerLocation: ${!!providerLocation?.currentLocation?.coordinates}, pickup coords: ${!!job.bookingData?.pickup?.coordinates}`);
     }
 
     const mapJobStatus = (dbStatus) => {
@@ -400,21 +407,17 @@ export const getCustomerJobDetails = async (req, res) => {
         'in_progress': 'started',
         'completed': 'completed',
         'cancelled': 'cancelled',
-        'completed_conformed': 'completed_conformed',
+        'completed_confirmed': 'completed_confirmed',
+        'completed_provider': 'completed_provider',
       };
       return statusMap[dbStatus] || dbStatus;
     };
 
-    // Format duration from timeTracking if available
     const formatDuration = (totalSeconds) => {
       if (!totalSeconds || totalSeconds === 0) return '35 minutes';
-
       const hours = Math.floor(totalSeconds / 3600);
       const minutes = Math.floor((totalSeconds % 3600) / 60);
-
-      if (hours > 0) {
-        return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''}`;
-      }
+      if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''}`;
       return `${minutes} minute${minutes > 1 ? 's' : ''}`;
     };
 
@@ -440,16 +443,8 @@ export const getCustomerJobDetails = async (req, res) => {
         name: job.providerId.fullName || 'Provider',
         phone: job.providerId.phoneNumber || '',
         rating: job.providerId.rating || 4.5,
-        profileImage: job.providerId.profileImage,
-        yearsOfExperience: job.providerId.yearsOfExperience || 3,
-        completedJobs: job.providerId.completedJobs || 127,
-        vehicle: {
-          type: job.bookingData?.vehicle?.type || 'Service Vehicle',
-          makeModel: job.bookingData?.vehicle?.makeModel || 'Professional Vehicle',
-          licensePlate: job.bookingData?.vehicle?.licensePlate || 'BHR 1234',
-          color: job.bookingData?.vehicle?.color || 'White',
-          description: `${job.bookingData?.vehicle?.color || 'White'} ${job.bookingData?.vehicle?.makeModel || 'Service Vehicle'}`
-        }
+        profileImage: job.providerId.profileImage || null,
+        completedJobs: job.providerId.totalJobsCompleted || 0, // ✅ correct field
       } : null,
 
       providerLocation: providerLocation?.currentLocation ? {
@@ -459,17 +454,14 @@ export const getCustomerJobDetails = async (req, res) => {
         updatedAt: providerLocation.currentLocation.lastUpdated
       } : null,
 
-      // ⭐ TIMER DATA - Added for the completion screen
       timeTracking: {
         totalSeconds: job.timeTracking?.totalSeconds || 0,
         isPaused: job.timeTracking?.isPaused || false,
         pausedAt: job.timeTracking?.pausedAt || null,
         timeExtensions: job.timeTracking?.timeExtensions || [],
         startedAt: job.timeTracking?.startedAt || null,
-        completedAt: job.timeTracking?.completedAt || null
       },
 
-      // ⭐ Timeline data for completion time
       timeline: {
         acceptedAt: job.acceptedAt || null,
         startedAt: job.startedAt || null,
@@ -483,33 +475,28 @@ export const getCustomerJobDetails = async (req, res) => {
         tip: job.bookingData?.payment?.selectedTip || 0
       },
 
-      // ⭐ Formatted duration for convenience
       formattedDuration: formatDuration(job.timeTracking?.totalSeconds),
-
-      estimatedArrival: estimatedArrival,
-      distance: distance,
+      estimatedArrival,
+      distance,
       createdAt: job.acceptedAt || job.createdAt
     };
 
-    // Log to verify timer data is included
-    console.log('✅ Job details fetched with timer:', {
+    console.log(`✅ Job details response built:`, {
       bookingId: job.bookingId,
-      totalSeconds: job.timeTracking?.totalSeconds,
-      formatted: formatDuration(job.timeTracking?.totalSeconds),
-      completedAt: job.completedAt
+      status: jobDetails.status,
+      hasProviderLocation: !!jobDetails.providerLocation,
+      estimatedArrival,
+      distance,
+      totalSeconds: job.timeTracking?.totalSeconds
     });
 
-    res.json({
-      success: true,
-      job: jobDetails
-    });
+    res.json({ success: true, job: jobDetails });
 
   } catch (error) {
-    console.error('Get customer job details error:', error);
+    console.error('❌ Get customer job details error:', error);
     res.status(500).json({ error: error.message });
   }
 };
-
 
 
 // Get provider's real-time location
