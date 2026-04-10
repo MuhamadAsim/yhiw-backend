@@ -204,6 +204,19 @@ function calculateSimpleDistance(lat1, lon1, lat2, lon2) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ─────────────────────────────────────────────
 //  Constants
 // ─────────────────────────────────────────────
@@ -241,9 +254,7 @@ const buildBookingData = (notification) => ({
 
   pickup: notification.pickup,
 
-  // ✅ CRITICAL FIX: remove null dropoff safely
-   ...(hasDropoff(notification.dropoff) ? { dropoff: notification.dropoff } : {}),
-
+  ...(hasDropoff(notification.dropoff) ? { dropoff: notification.dropoff } : {}),
 
   vehicle: mapVehicleData(notification.vehicle),
 
@@ -267,6 +278,7 @@ const buildBookingData = (notification) => ({
   partDescription: notification.partDescription,
   hasInsurance: notification.hasInsurance
 });
+
 /**
  * Attempts to resolve an ETA string using Google Maps.
  * Falls back to a default string on any failure.
@@ -300,6 +312,55 @@ const resolveETA = async (providerId, pickupCoordinates) => {
   return DEFAULT_ETA;
 };
 
+/**
+ * Sends an Expo push notification to a single token.
+ * Never throws — failures are logged and swallowed so they
+ * never affect the already-committed job.
+ */
+const sendExpoNotification = async ({ token, title, body, data = {} }) => {
+
+
+  console.log(`\n📲 ===== SEND PUSH NOTIFICATION =====`);
+  console.log(`   Token:  ${token}`);
+  console.log(`   Title:  ${title}`);
+  console.log(`   Body:   ${body}`);
+  console.log(`   Data:   ${JSON.stringify(data)}`);
+
+  if (!Expo.isExpoPushToken(token)) {
+    console.warn(`⚠️  Invalid Expo push token, skipping: ${token}`);
+    return;
+  }
+
+  console.log(`✅ Token is valid Expo push token`);
+
+  try {
+    const [ticket] = await expo.sendPushNotificationsAsync([
+      {
+        to: token,
+        sound: 'default',
+        title,
+        body,
+        data,
+        priority: 'high'
+      }
+    ]);
+
+    console.log(`📬 Expo ticket received:`, JSON.stringify(ticket));
+
+    if (ticket.status === 'error') {
+      console.warn(`⚠️  Expo ticket error: ${ticket.message} (details: ${JSON.stringify(ticket.details)})`);
+    } else {
+      console.log(`✅ Push notification delivered — receipt id: ${ticket.id}`);
+    }
+  } catch (err) {
+    console.warn(`⚠️  Expo push failed: ${err.message}`);
+  }
+
+  console.log(`===== SEND PUSH NOTIFICATION END =====\n`);
+};
+
+
+
 // ─────────────────────────────────────────────
 //  Transaction body  (runs inside retry loop)
 // ─────────────────────────────────────────────
@@ -318,7 +379,6 @@ const runAcceptJobTransaction = async (bookingId, providerId) => {
     session.startTransaction();
 
     // ── SECTION 1: Duplicate-accept guard ──────────────────────────────────
-    // If this exact provider already owns this booking, return it immediately.
     const existingProviderJob = await Job.findOne({
       bookingId,
       providerId,
@@ -374,7 +434,6 @@ const runAcceptJobTransaction = async (bookingId, providerId) => {
     }
 
     // ── SECTION 3: Customer active-job check ───────────────────────────────
-    // Resolve the customerId first via the notification (read-only, no status change yet).
     const notificationPrecheck = await Notification.findOne({ bookingId }).session(session);
 
     if (notificationPrecheck?.customerId) {
@@ -400,7 +459,6 @@ const runAcceptJobTransaction = async (bookingId, providerId) => {
     }
 
     // ── SECTION 4: Race-condition-safe job claim ───────────────────────────
-    // Atomically transition notification from 'pending' → 'accepted'.
     const notification = await Notification.findOneAndUpdate(
       { bookingId, status: 'pending' },
       {
@@ -414,7 +472,6 @@ const runAcceptJobTransaction = async (bookingId, providerId) => {
     );
 
     if (!notification) {
-      // Inspect existing record to return the most precise error.
       const staleNotification = await Notification.findOne({ bookingId }).session(session);
       await session.abortTransaction();
 
@@ -486,24 +543,42 @@ const runAcceptJobTransaction = async (bookingId, providerId) => {
     await job.save({ session });
     console.log(`✅ Job document created: ${job._id}`);
 
-    // ── SECTION 7: Provider live-status update ────────────────────────────
-    await ProviderLiveStatus.findOneAndUpdate(
-      { providerId },
-      {
-        currentBookingId: bookingId,
-        isAvailable: false,
-        lastSeen: new Date(),
-        currentJobStatus: 'accepted'
-      },
-      { session, upsert: true }
-    );
-    console.log(`✅ ProviderLiveStatus updated — provider now unavailable`);
+    // ── SECTION 7: Provider live-status + currentServiceId updates ────────
+    await Promise.all([
+      // Mark provider unavailable in live-status
+      ProviderLiveStatus.findOneAndUpdate(
+        { providerId },
+        {
+          currentBookingId: bookingId,
+          isAvailable: false,
+          lastSeen: new Date(),
+          currentJobStatus: 'accepted'
+        },
+        { session, upsert: true }
+      ),
+
+      // ✅ Stamp active booking on provider
+      User.findByIdAndUpdate(
+        providerId,
+        { currentServiceId: bookingId },
+        { session }
+      ),
+
+      // ✅ Stamp active booking on customer
+      User.findByIdAndUpdate(
+        notification.customerId,
+        { currentServiceId: bookingId },
+        { session }
+      )
+    ]);
+
+    console.log(`✅ ProviderLiveStatus updated + currentServiceId set on provider and customer`);
 
     // ── Commit ─────────────────────────────────────────────────────────────
     await session.commitTransaction();
     console.log(`✅ Transaction committed`);
 
-    return { job, notification };
+    return { job, notification, providerName: provider.fullName };
 
   } catch (err) {
     await session.abortTransaction();
@@ -512,11 +587,6 @@ const runAcceptJobTransaction = async (bookingId, providerId) => {
     session.endSession();
   }
 };
-
-
-
-
-
 
 // ─────────────────────────────────────────────
 //  Controller
@@ -542,12 +612,28 @@ export const acceptJob = async (req, res) => {
       }
 
       // ── Post-commit operations (outside transaction) ─────────────────────
-      const { job, notification } = result;
+      const { job, notification, providerName } = result;
 
       const [customer, estimatedArrival] = await Promise.all([
         User.findById(notification.customerId),
         resolveETA(providerId, notification.pickup?.coordinates)
       ]);
+
+      // ✅ Push notification to customer — non-fatal if it fails
+      if (customer?.pushToken) {
+        await sendExpoNotification({
+          token: customer.pushToken,
+          title: '🚗 Provider On The Way!',
+          body: `${providerName} has accepted your ${notification.serviceName} request and is heading to you.`,
+          data: {
+            type: 'JOB_ACCEPTED',
+            bookingId: job.bookingId,
+            estimatedArrival
+          }
+        });
+      } else {
+        console.warn(`⚠️  Customer has no push token, skipping notification — customerId: ${customer?._id}`);
+      }
 
       console.log(`\n📤 Sending success response — bookingId: ${job.bookingId}`);
       console.log(`🔵 ===== ACCEPT JOB COMPLETED =====\n`);
@@ -558,8 +644,8 @@ export const acceptJob = async (req, res) => {
         job: {
           bookingId: job.bookingId,
           customer: {
-            name: customer?.fullName || notification.customer.name,
-            phone: customer?.phoneNumber || notification.customer.phone,
+            name: customer?.fullName || notification.customer?.name,
+            phone: customer?.phoneNumber || notification.customer?.phone,
             location: notification.pickup?.address
           },
           estimatedArrival
@@ -601,6 +687,9 @@ export const acceptJob = async (req, res) => {
     message: 'Failed to accept job after multiple attempts. Please try again.'
   });
 };
+
+
+
 
 
 

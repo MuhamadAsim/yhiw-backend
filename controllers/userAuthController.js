@@ -651,73 +651,38 @@ export const printAllNotificationsStandalone = async () => {
 
 
 
-// export const printAllUsers = async () => {
-//   try {
-//     console.log("\n========== RESETTING JOB COLLECTION ==========");
-
-//     // Count before deletion
-//     const countBefore = await Job.countDocuments();
-//     console.log(`📊 Jobs before reset: ${countBefore}`);
-
-//     // Print existing indexes
-//     const indexes = await mongoose.connection.collection("jobs").indexes();
-
-//     console.log("\n📑 Existing Indexes:");
-//     indexes.forEach((index) => {
-//       console.log(`- ${index.name}`);
-//     });
-
-//     // Remove old jobNumber index if it exists
-//     const jobNumberIndex = indexes.find(
-//       (index) => index.name === "jobNumber_1"
-//     );
-
-//     if (jobNumberIndex) {
-//       await mongoose.connection.collection("jobs").dropIndex("jobNumber_1");
-//       console.log("🗑 Removed old index: jobNumber_1");
-//     }
-
-//     // Delete ONLY non-completed jobs (keep completed ones)
-//     const deleteQuery = {
-//       status: { 
-//         $nin: ['completed', 'completed_confirmed'] 
-//       }
-//     };
-    
-//     const result = await Job.deleteMany(deleteQuery);
-
-//     console.log(`🗑 Deleted ${result.deletedCount} non-completed jobs`);
-//     console.log(`✅ Preserved completed and completed_confirmed jobs`);
-
-//     // Verify deletion
-//     const countAfter = await Job.countDocuments();
-//     const completedCount = await Job.countDocuments({ 
-//       status: { $in: ['completed', 'completed_confirmed'] } 
-//     });
-    
-//     console.log(`📊 Jobs after reset: ${countAfter} total`);
-//     console.log(`📊 Completed jobs preserved: ${completedCount}`);
-
-//     console.log("==============================================\n");
-
-//     return {
-//       success: true,
-//       deletedCount: result.deletedCount,
-//       preservedCount: completedCount
-//     };
-
-//   } catch (error) {
-//     console.error("\n❌ RESET JOBS ERROR:", error.message);
-//     return {
-//       success: false,
-//       error: error.message
-//     };
-//   }
-// };
 
 
+export const printActiveCustomerServices = async () => {
+  try {
+    console.log("\n========== ACTIVE CUSTOMER SERVICES ==========");
 
+    const customers = await User.find(
+      { 
+        role: 'customer',
+        currentServiceId: { $ne: null }
+      },
+      'fullName phoneNumber currentServiceId'
+    );
 
+    if (customers.length === 0) {
+      console.log("😴 No active customer jobs found");
+      return;
+    }
+
+    customers.forEach((user) => {
+      console.log(`👤 ${user.fullName}`);
+      console.log(`📞 ${user.phoneNumber}`);
+      console.log(`🚗 Active Service ID: ${user.currentServiceId}`);
+      console.log('-----------------------------------');
+    });
+
+    console.log("=============================================\n");
+
+  } catch (err) {
+    console.error("❌ ERROR:", err.message);
+  }
+};
 
 
 
