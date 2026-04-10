@@ -203,6 +203,9 @@ export const checkJobStatus = async (req, res) => {
 
 
 
+
+
+
 // controllers/jobController.js
 export const cancelJob = async (req, res) => {
   const maxRetries = 3;
@@ -222,33 +225,28 @@ export const cancelJob = async (req, res) => {
       console.log(`📦 Booking ID: ${bookingId}`);
       console.log(`👤 User ID: ${userId}`);
 
-      // Use findOneAndUpdate with optimistic concurrency control
-      const activeJob = await Job.findOneAndUpdate(
-        {
-          bookingId,
-          status: { $in: ['accepted', 'in_progress'] },
-          // Add version check if you have version field (__v)
-          ...(retryCount > 0 && { __v: currentVersion }) // If you track versions
-        },
-        {
-          $set: {
-            status: 'cancelled',
-            cancelledAt: new Date(),
-            cancellationReason: reason || 'cancelled_by_user',
-            cancelledBy: userId
-          }
-        },
-        {
-          new: true,
-          session,
-          runValidators: true
+      // FIRST: Check if this is a Job (accepted booking)
+      const existingJob = await Job.findOne({ bookingId }).session(session);
+      
+      if (existingJob) {
+        // Check if job can be cancelled
+        const cancellableStatuses = ['accepted', 'in_progress'];
+        if (!cancellableStatuses.includes(existingJob.status)) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({
+            error: 'Invalid job state',
+            message: `Cannot cancel job with status: ${existingJob.status}. Only accepted or in_progress jobs can be cancelled.`
+          });
         }
-      ).session(session);
 
-      if (activeJob) {
-        // Verify ownership
-        if (activeJob.customerId.toString() !== userId &&
-          activeJob.providerId?.toString() !== userId) {
+        // Verify ownership and determine who is cancelling
+        let cancelledBy;
+        if (existingJob.customerId.toString() === userId) {
+          cancelledBy = 'customer';
+        } else if (existingJob.providerId && existingJob.providerId.toString() === userId) {
+          cancelledBy = 'provider';
+        } else {
           await session.abortTransaction();
           session.endSession();
           return res.status(403).json({
@@ -257,151 +255,186 @@ export const cancelJob = async (req, res) => {
           });
         }
 
-        // Update provider availability with retry logic
-        if (activeJob.providerId) {
-          const providerUpdate = await ProviderLiveStatus.findOneAndUpdate(
-            { providerId: activeJob.providerId },
-            {
-              isAvailable: true,
-              currentBookingId: null,
-              currentJobStatus: null,
-              lastSeen: new Date()
-            },
-            {
-              session,
-              new: true // Return updated document
+        // Update the job - FIXED: Use enum values, not user ID
+        const updatedJob = await Job.findOneAndUpdate(
+          { 
+            bookingId, 
+            status: { $in: cancellableStatuses }
+          },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              cancelledBy: cancelledBy  // ✅ Now using 'customer', 'provider', or 'system'
             }
-          );
-
-          if (!providerUpdate) {
-            console.log(`⚠️ Provider ${activeJob.providerId} not found in live status, creating entry`);
-            await ProviderLiveStatus.create([{
-              providerId: activeJob.providerId,
-              isAvailable: true,
-              currentBookingId: null,
-              currentJobStatus: null,
-              lastSeen: new Date()
-            }], { session });
+          },
+          {
+            returnDocument: 'after',  // ✅ Fixed deprecated 'new' option
+            session,
+            runValidators: true
           }
+        ).session(session);
 
-          console.log(`✅ Provider ${activeJob.providerId} marked as available`);
+        if (!updatedJob) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(409).json({
+            error: 'Conflict',
+            message: 'Job status changed while processing. Please try again.'
+          });
+        }
+
+        // Update provider availability if provider exists
+        if (existingJob.providerId) {
+          try {
+            await ProviderLiveStatus.findOneAndUpdate(
+              { providerId: existingJob.providerId },
+              {
+                $set: {
+                  isAvailable: true,
+                  currentBookingId: null,
+                  currentJobStatus: null,
+                  lastSeen: new Date()
+                }
+              },
+              {
+                upsert: true,
+                session
+              }
+            );
+            console.log(`✅ Provider ${existingJob.providerId} marked as available`);
+          } catch (providerError) {
+            console.error('Error updating provider status:', providerError);
+            // Don't fail the cancellation if provider update fails
+          }
         }
 
         await session.commitTransaction();
         session.endSession();
 
+        console.log(`✅ Job ${bookingId} cancelled successfully by ${cancelledBy}`);
+        
         return res.json({
           success: true,
           message: 'Job cancelled successfully',
           data: {
             bookingId,
             status: 'cancelled',
-            cancelledAt: activeJob.cancelledAt
+            cancelledAt: updatedJob.cancelledAt,
+            cancelledBy: cancelledBy
           }
         });
       }
 
-      // Check for pending notification with atomic update
-      const notification = await Notification.findOneAndUpdate(
-        {
-          bookingId,
-          status: 'pending',
-          // Ensure we only cancel if still pending
-          $or: [
-            { expiresAt: { $gt: new Date() } },
-            { expiresAt: { $exists: false } }
-          ]
-        },
-        {
-          $set: {
-            status: 'cancelled',
-            cancelledAt: new Date(),
-            cancellationReason: reason || 'cancelled_by_customer'
-          }
-        },
-        {
-          new: true,
-          session,
-          runValidators: true
-        }
-      );
-
-      if (!notification) {
-        // Check if job exists in terminal state
-        const existingJob = await Job.findOne({
-          bookingId,
-          status: { $in: ['completed', 'cancelled', 'expired'] }
-        }).session(session);
-
-        if (existingJob) {
+      // SECOND: Check if this is a Notification (pending/scheduled booking)
+      const existingNotification = await Notification.findOne({ bookingId }).session(session);
+      
+      if (existingNotification) {
+        // Check if notification can be cancelled
+        const cancellableStatuses = ['pending', 'scheduled'];
+        
+        if (!cancellableStatuses.includes(existingNotification.status)) {
           await session.abortTransaction();
           session.endSession();
           return res.status(400).json({
-            error: 'Invalid job state',
-            message: `Cannot cancel job with status: ${existingJob.status}`
+            error: 'Invalid notification state',
+            message: `Cannot cancel notification with status: ${existingNotification.status}`
           });
         }
 
-        // Check if this is a race condition (notification being processed)
-        const processingNotification = await Notification.findOne({
-          bookingId,
-          status: { $in: ['accepted', 'processing'] }
-        }).session(session);
-
-        if (processingNotification) {
-          // Race condition detected, retry
-          console.log('⚠️ Race condition detected, retrying...');
+        // Verify ownership
+        if (existingNotification.customerId.toString() !== userId) {
           await session.abortTransaction();
           session.endSession();
-          retryCount++;
-          continue;
+          return res.status(403).json({
+            error: 'Unauthorized',
+            message: 'You do not have permission to cancel this booking'
+          });
         }
 
-        await session.abortTransaction();
+        // Update the notification
+        const updatedNotification = await Notification.findOneAndUpdate(
+          { 
+            bookingId, 
+            status: { $in: cancellableStatuses }
+          },
+          {
+            $set: {
+              status: 'expired',  // Using 'expired' as cancelled status for notifications
+              expiresAt: new Date() // Set expiry to now
+            }
+          },
+          {
+            returnDocument: 'after',  // ✅ Fixed deprecated 'new' option
+            session,
+            runValidators: true
+          }
+        ).session(session);
+
+        if (!updatedNotification) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(409).json({
+            error: 'Conflict',
+            message: 'Notification status changed while processing. Please try again.'
+          });
+        }
+
+        await session.commitTransaction();
         session.endSession();
-        return res.status(404).json({
-          error: 'Booking not found',
-          message: 'No active booking found with this ID'
+
+        console.log(`✅ Notification ${bookingId} cancelled successfully`);
+        
+        return res.json({
+          success: true,
+          message: 'Booking cancelled successfully',
+          data: {
+            bookingId,
+            status: 'cancelled',
+            cancelledAt: new Date()
+          }
         });
       }
 
-      console.log(`✅ Notification cancelled successfully`);
-
-      await session.commitTransaction();
+      // No job or notification found
+      await session.abortTransaction();
       session.endSession();
-
-      return res.json({
-        success: true,
-        message: 'Booking cancelled successfully',
-        data: {
-          bookingId,
-          status: 'cancelled',
-          cancelledAt: new Date()
-        }
+      
+      return res.status(404).json({
+        error: 'Booking not found',
+        message: 'No active booking found with this ID'
       });
 
     } catch (error) {
-      await session.abortTransaction();
-      session.endSession();
+      console.error(`❌ Cancel job error (attempt ${retryCount + 1}/${maxRetries}):`, error);
+      
+      try {
+        await session.abortTransaction();
+      } catch (abortError) {
+        console.error('Error aborting transaction:', abortError);
+      }
+      
+      try {
+        session.endSession();
+      } catch (endError) {
+        console.error('Error ending session:', endError);
+      }
 
-      // Check for write conflict error
-      if (error.code === 112 || // Write conflict
-        error.codeName === 'WriteConflict' ||
-        error.message.includes('WriteConflict')) {
-
-        console.log(`⚠️ Write conflict detected, retry ${retryCount + 1}/${maxRetries}`);
+      // Check for duplicate key or other recoverable errors
+      if (error.code === 11000 || // Duplicate key
+          error.code === 112 || // Write conflict
+          error.codeName === 'WriteConflict') {
+        
         retryCount++;
-
         if (retryCount < maxRetries) {
-          // Exponential backoff
-          await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 100));
+          const delay = Math.pow(2, retryCount) * 100;
+          console.log(`⚠️ Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
       }
 
-      console.error('❌ Cancel job error:', error);
-
-      // Don't show raw error to customer
+      // Return user-friendly error
       return res.status(500).json({
         error: 'Unable to cancel booking',
         message: 'Please try again in a few moments'
@@ -415,7 +448,6 @@ export const cancelJob = async (req, res) => {
     message: 'Unable to process cancellation due to high traffic. Please try again.'
   });
 };
-
 
 
 
