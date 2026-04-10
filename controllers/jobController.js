@@ -6,6 +6,8 @@ import User from '../models/userModel.js';
 import mongoose from 'mongoose';
 
 
+
+
 export const createJobNotification = async (req, res) => {
   try {
     console.log('\n🔵 ===== CREATE JOB NOTIFICATION STARTED =====');
@@ -40,10 +42,19 @@ export const createJobNotification = async (req, res) => {
     let scheduledAt = null;
 
     if (isScheduled && schedule?.scheduledDateTime) {
-      const { date, timeSlot } = schedule.scheduledDateTime;
+      const { isoString, date, timeSlot } = schedule.scheduledDateTime;
+      if (isoString) {
+        scheduledAt = new Date(isoString);
+      } else if (date && timeSlot) {
+        scheduledAt = new Date(`${date}T${timeSlot}`);
+      }
+    }
 
-      // Combine date + timeSlot into ONE Date
-      scheduledAt = new Date(`${date} ${timeSlot}`);
+    // ✅ Validate scheduledAt if this is a scheduled booking
+    if (isScheduled && (!scheduledAt || isNaN(scheduledAt.getTime()))) {
+      return res.status(400).json({
+        error: 'Invalid scheduled date/time provided'
+      });
     }
 
     console.log('\n📅 SCHEDULE INFO:');
@@ -97,16 +108,16 @@ export const createJobNotification = async (req, res) => {
       partDescription: spareParts?.partDescription || null,
       hasInsurance: carRental?.hasInsurance || false,
 
-      // ✅ STATUS LOGIC FIXED
+      // ✅ Status logic
       status: isScheduled ? 'scheduled' : 'pending',
 
-      // ✅ SCHEDULE FIELDS FIXED
+      // ✅ Schedule fields
       isScheduled: isScheduled,
       serviceTime: serviceTime,
       scheduledAt: scheduledAt
     };
 
-    // ✅ Expiration logic (VERY IMPORTANT)
+    // ✅ Expiration logic
     if (!isScheduled) {
       notificationData.expiresAt = new Date(Date.now() + 3 * 60 * 1000);
       console.log('⏰ Immediate service - Will expire at:', notificationData.expiresAt);
@@ -155,7 +166,6 @@ export const createJobNotification = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
 
 
 export const checkJobStatus = async (req, res) => {
