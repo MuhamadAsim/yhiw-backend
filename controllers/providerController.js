@@ -233,26 +233,36 @@ const buildBookingData = (notification) => ({
   serviceName: notification.serviceName,
   servicePrice: notification.servicePrice,
   serviceCategory: notification.serviceCategory,
+
   pickup: notification.pickup,
-  dropoff: notification.dropoff,
+
+  // ✅ CRITICAL FIX: remove null dropoff safely
+  ...(notification.dropoff && Object.keys(notification.dropoff || {}).length > 0
+    ? { dropoff: notification.dropoff }
+    : {}),
+
   vehicle: mapVehicleData(notification.vehicle),
+
   customer: {
-    name: notification.customer.name,
-    phone: notification.customer.phone,
+    name: notification.customer?.name,
+    phone: notification.customer?.phone,
     email: notification.customer?.email || ''
   },
+
   urgency: notification.urgency,
-  issues: notification.issues,
-  description: notification.description,
-  payment: notification.payment,
+  issues: notification.issues || [],
+  description: notification.description || '',
+
+  payment: notification.payment || {},
+
   isCarRental: notification.isCarRental,
   isFuelDelivery: notification.isFuelDelivery,
   isSpareParts: notification.isSpareParts,
+
   fuelType: notification.fuelType,
   partDescription: notification.partDescription,
   hasInsurance: notification.hasInsurance
 });
-
 /**
  * Attempts to resolve an ETA string using Google Maps.
  * Falls back to a default string on any failure.

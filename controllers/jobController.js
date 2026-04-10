@@ -237,7 +237,7 @@ export const cancelJob = async (req, res) => {
 
       // FIRST: Check if this is a Job (accepted booking)
       const existingJob = await Job.findOne({ bookingId }).session(session);
-      
+
       if (existingJob) {
         // Check if job can be cancelled
         const cancellableStatuses = ['accepted', 'in_progress'];
@@ -267,8 +267,8 @@ export const cancelJob = async (req, res) => {
 
         // Update the job - FIXED: Use enum values, not user ID
         const updatedJob = await Job.findOneAndUpdate(
-          { 
-            bookingId, 
+          {
+            bookingId,
             status: { $in: cancellableStatuses }
           },
           {
@@ -297,20 +297,12 @@ export const cancelJob = async (req, res) => {
         // Update provider availability if provider exists
         if (existingJob.providerId) {
           try {
-            await ProviderLiveStatus.findOneAndUpdate(
-              { providerId: existingJob.providerId },
+            await Notification.findOneAndDelete(
               {
-                $set: {
-                  isAvailable: true,
-                  currentBookingId: null,
-                  currentJobStatus: null,
-                  lastSeen: new Date()
-                }
+                bookingId,
+                status: { $in: cancellableStatuses }
               },
-              {
-                upsert: true,
-                session
-              }
+              { session }
             );
             console.log(`✅ Provider ${existingJob.providerId} marked as available`);
           } catch (providerError) {
@@ -323,7 +315,7 @@ export const cancelJob = async (req, res) => {
         session.endSession();
 
         console.log(`✅ Job ${bookingId} cancelled successfully by ${cancelledBy}`);
-        
+
         return res.json({
           success: true,
           message: 'Job cancelled successfully',
@@ -338,11 +330,11 @@ export const cancelJob = async (req, res) => {
 
       // SECOND: Check if this is a Notification (pending/scheduled booking)
       const existingNotification = await Notification.findOne({ bookingId }).session(session);
-      
+
       if (existingNotification) {
         // Check if notification can be cancelled
         const cancellableStatuses = ['pending', 'scheduled'];
-        
+
         if (!cancellableStatuses.includes(existingNotification.status)) {
           await session.abortTransaction();
           session.endSession();
@@ -364,8 +356,8 @@ export const cancelJob = async (req, res) => {
 
         // Update the notification
         const updatedNotification = await Notification.findOneAndUpdate(
-          { 
-            bookingId, 
+          {
+            bookingId,
             status: { $in: cancellableStatuses }
           },
           {
@@ -394,7 +386,7 @@ export const cancelJob = async (req, res) => {
         session.endSession();
 
         console.log(`✅ Notification ${bookingId} cancelled successfully`);
-        
+
         return res.json({
           success: true,
           message: 'Booking cancelled successfully',
@@ -409,7 +401,7 @@ export const cancelJob = async (req, res) => {
       // No job or notification found
       await session.abortTransaction();
       session.endSession();
-      
+
       return res.status(404).json({
         error: 'Booking not found',
         message: 'No active booking found with this ID'
@@ -417,13 +409,13 @@ export const cancelJob = async (req, res) => {
 
     } catch (error) {
       console.error(`❌ Cancel job error (attempt ${retryCount + 1}/${maxRetries}):`, error);
-      
+
       try {
         await session.abortTransaction();
       } catch (abortError) {
         console.error('Error aborting transaction:', abortError);
       }
-      
+
       try {
         session.endSession();
       } catch (endError) {
@@ -432,9 +424,9 @@ export const cancelJob = async (req, res) => {
 
       // Check for duplicate key or other recoverable errors
       if (error.code === 11000 || // Duplicate key
-          error.code === 112 || // Write conflict
-          error.codeName === 'WriteConflict') {
-        
+        error.code === 112 || // Write conflict
+        error.codeName === 'WriteConflict') {
+
         retryCount++;
         if (retryCount < maxRetries) {
           const delay = Math.pow(2, retryCount) * 100;

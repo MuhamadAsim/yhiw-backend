@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import app from "./app.js";
 import connectDB from "./config/db.js";
-import { printAllUsers } from "./controllers/userAuthController.js";
+import { printAllUsers,printAllNotificationsStandalone } from "./controllers/userAuthController.js";
 import { startScheduler } from "./cron/scheduler.js"; // 👈 add this
 
 dotenv.config();
@@ -11,7 +11,7 @@ const PORT = 4000;
 /* -------------------- Start Server -------------------- */
 const startServer = async () => {
   await connectDB();
-  await printAllUsers();
+await printAllNotificationsStandalone();
 
   startScheduler(); 
 
