@@ -13,7 +13,7 @@ const startServer = async () => {
   await connectDB();
   // await printAllNotificationsStandalone();
   // await printActiveCustomerServices();
-  await printAllUsers();
+  // await printAllUsers();
   startScheduler();
 
 

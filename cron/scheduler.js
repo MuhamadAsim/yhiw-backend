@@ -2,9 +2,58 @@
 import cron from 'node-cron';
 import Notification from '../models/notificationModel.js';
 import User from '../models/userModel.js';
-import { sendExpoNotification } from '../utils/notifications.js';
 
 const TTL_MINUTES = 3;
+
+
+/**
+ * Sends an Expo push notification to a single token.
+ * Never throws — failures are logged and swallowed so they
+ * never affect the already-committed job.
+ */
+const sendExpoNotification = async ({ token, title, body, data = {} }) => {
+
+
+  console.log(`\n📲 ===== SEND PUSH NOTIFICATION =====`);
+  console.log(`   Token:  ${token}`);
+  console.log(`   Title:  ${title}`);
+  console.log(`   Body:   ${body}`);
+  console.log(`   Data:   ${JSON.stringify(data)}`);
+
+  if (!Expo.isExpoPushToken(token)) {
+    console.warn(`⚠️  Invalid Expo push token, skipping: ${token}`);
+    return;
+  }
+
+  console.log(`✅ Token is valid Expo push token`);
+
+  try {
+    const [ticket] = await expo.sendPushNotificationsAsync([
+      {
+        to: token,
+        sound: 'default',
+        title,
+        body,
+        data,
+        priority: 'high'
+      }
+    ]);
+
+    console.log(`📬 Expo ticket received:`, JSON.stringify(ticket));
+
+    if (ticket.status === 'error') {
+      console.warn(`⚠️  Expo ticket error: ${ticket.message} (details: ${JSON.stringify(ticket.details)})`);
+    } else {
+      console.log(`✅ Push notification delivered — receipt id: ${ticket.id}`);
+    }
+  } catch (err) {
+    console.warn(`⚠️  Expo push failed: ${err.message}`);
+  }
+
+  console.log(`===== SEND PUSH NOTIFICATION END =====\n`);
+};
+
+
 
 export const activateScheduledJobsForCustomer = async (customerId) => {
   const now = new Date();
