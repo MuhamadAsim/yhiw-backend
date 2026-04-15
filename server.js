@@ -11,9 +11,9 @@ const PORT = 4000;
 /* -------------------- Start Server -------------------- */
 const startServer = async () => {
   await connectDB();
-  await printAllNotificationsStandalone();
-  await printActiveCustomerServices();
-
+  // await printAllNotificationsStandalone();
+  // await printActiveCustomerServices();
+  await printAllUsers();
   startScheduler();
 
 

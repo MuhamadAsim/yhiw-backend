@@ -703,6 +703,10 @@ export const acceptJob = async (req, res) => {
 
 
 
+
+
+
+
 export const updateProviderStatus = async (req, res) => {
   try {
     const { firebaseUserId } = req.params;

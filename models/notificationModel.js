@@ -35,7 +35,7 @@ const notificationSchema = new mongoose.Schema({
       lng: Number
     }
   },
-  
+
   // Vehicle data
   vehicle: {
     vehicleType: String,
@@ -82,7 +82,7 @@ const notificationSchema = new mongoose.Schema({
   // Status
   status: {
     type: String,
-    enum: ['scheduled', 'pending', 'accepted', 'expired'], 
+    enum: ['scheduled', 'pending', 'accepted', 'expired'],
     default: 'pending'
   },
 
@@ -91,6 +91,10 @@ const notificationSchema = new mongoose.Schema({
   serviceTime: { type: String, default: 'schedule_later' },
 
   scheduledAt: { type: Date }, // ✅ replaced scheduledDate + scheduledTimeSlot
+  activeServiceNotificationSent: {
+    type: Boolean,
+    default: false
+  },
 
   // Who viewed this job
   viewedBy: [{
@@ -109,7 +113,7 @@ const notificationSchema = new mongoose.Schema({
 // ✅ TTL index (unchanged logic, already correct)
 notificationSchema.index(
   { expiresAt: 1 },
-  { 
+  {
     expireAfterSeconds: 0,
     partialFilterExpression: { expiresAt: { $exists: true } }
   }

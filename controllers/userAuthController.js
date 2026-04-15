@@ -409,129 +409,40 @@ export const deleteAllUsers = async () => {
 
 
 
-
-/**
- * @desc    Print all notifications with their status (for debugging)
- * @route   GET /api/notifications/print-all
- * @access  Private/Admin only
- */
 export const printAllUsers = async (req, res) => {
   try {
-    const countBefore = await Notification.countDocuments();
+    const users = await User.find({}, {
+      fullName: 1,
+      currentServiceId: 1,
+      role: 1,
+    }).lean();
 
-    console.log('\n========== PRINTING ALL NOTIFICATIONS ==========');
-    console.log(`📊 Total notifications found in Notification model: ${countBefore}`);
-    console.log('==================================================\n');
+    console.log('\n========== USERS & currentServiceId ==========');
+    console.log(`📊 Total users: ${users.length}\n`);
 
-    if (countBefore === 0) {
-      console.log('No notifications found in Notification model');
-      return res.status(200).json({
-        success: true,
-        message: 'No notifications found',
-        totalNotifications: 0
-      });
-    }
-
-    // Fetch all notifications with selected fields
-    const notifications = await Notification.find({}, {
-      bookingId: 1,
-      status: 1,
-      serviceName: 1,
-      serviceCategory: 1,
-      isScheduled: 1,
-      serviceTime: 1,
-      scheduledAt: 1,
-      expiresAt: 1,
-      'customer.name': 1,
-      'customer.phone': 1,
-      createdAt: 1,
-      updatedAt: 1
-    }).sort({ createdAt: -1 }).lean(); // Sort by newest first
-
-    console.log('\n📋 Notification List:\n');
-
-    notifications.forEach((notification, index) => {
-      const createdAt = notification.createdAt ? new Date(notification.createdAt).toLocaleString() : 'N/A';
-      const scheduledAt = notification.scheduledAt ? new Date(notification.scheduledAt).toLocaleString() : 'N/A';
-      const expiresAt = notification.expiresAt ? new Date(notification.expiresAt).toLocaleString() : 'N/A';
-      
-      console.log(`${index + 1}. Booking ID: ${notification.bookingId}`);
-      console.log(`   Status: ${notification.status}`);
-      console.log(`   Service: ${notification.serviceName || 'N/A'} (${notification.serviceCategory || 'N/A'})`);
-      console.log(`   Customer: ${notification.customer?.name || 'N/A'} (${notification.customer?.phone || 'N/A'})`);
-      console.log(`   Schedule Type: ${notification.isScheduled ? 'Scheduled' : 'Immediate'}`);
-      console.log(`   Service Time: ${notification.serviceTime || 'N/A'}`);
-      console.log(`   Scheduled At: ${scheduledAt}`);
-      console.log(`   Expires At: ${expiresAt}`);
-      console.log(`   Created: ${createdAt}`);
+    users.forEach((user, index) => {
+      console.log(`${index + 1}. ${user.fullName} (${user.role})`);
+      console.log(`   currentServiceId: ${user.currentServiceId ?? 'null'}`);
       console.log('   --------------------');
     });
 
-    console.log('\n📊 Summary:');
-    console.log(`   Total Notifications: ${notifications.length}`);
-
-    // Count by status
-    const statusCounts = {};
-    notifications.forEach(notification => {
-      const status = notification.status || 'unknown';
-      statusCounts[status] = (statusCounts[status] || 0) + 1;
-    });
-
-    console.log('\n📈 Notifications by Status:');
-    Object.entries(statusCounts).forEach(([status, count]) => {
-      console.log(`   ${status}: ${count}`);
-    });
-
-    // Count by schedule type
-    const scheduledCount = notifications.filter(n => n.isScheduled === true).length;
-    const immediateCount = notifications.filter(n => n.isScheduled === false).length;
-    
-    console.log('\n📅 Notifications by Schedule Type:');
-    console.log(`   Scheduled: ${scheduledCount}`);
-    console.log(`   Immediate: ${immediateCount}`);
-
-    // Count expired notifications
-    const now = new Date();
-    const expiredCount = notifications.filter(n => n.expiresAt && new Date(n.expiresAt) < now).length;
-    console.log(`   Expired (past expiry): ${expiredCount}`);
-
-    console.log('\n==================================================\n');
+    console.log('==================================================\n');
 
     return res.status(200).json({
       success: true,
-      message: `Successfully printed ${notifications.length} notifications`,
-      totalNotifications: notifications.length,
-      summary: {
-        byStatus: statusCounts,
-        scheduled: scheduledCount,
-        immediate: immediateCount,
-        expired: expiredCount
-      },
-      notifications: notifications.map(n => ({
-        bookingId: n.bookingId,
-        status: n.status,
-        serviceName: n.serviceName,
-        serviceCategory: n.serviceCategory,
-        customerName: n.customer?.name,
-        customerPhone: n.customer?.phone,
-        isScheduled: n.isScheduled,
-        serviceTime: n.serviceTime,
-        scheduledAt: n.scheduledAt,
-        expiresAt: n.expiresAt,
-        createdAt: n.createdAt
+      total: users.length,
+      users: users.map(u => ({
+        name: u.fullName,
+        role: u.role,
+        currentServiceId: u.currentServiceId ?? null,
       }))
     });
 
   } catch (error) {
-    console.error('Print All Notifications Error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error printing notifications',
-      error: error.message
-    });
+    console.error('Print All Users Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
-
 
 
 
