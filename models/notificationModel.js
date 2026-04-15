@@ -110,18 +110,18 @@ const newnotificationSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 
-// ✅ TTL index (unchanged logic, already correct)
-newnotificationSchema.index(
-  { expiresAt: 1 },
-  {
-    expireAfterSeconds: 0,
-    partialFilterExpression: { 
-      expiresAt: { $exists: true },
-      status: { $in: ['pending', 'accepted', 'expired'] }  // Only these statuses
-      // status: { $ne: 'scheduled' }  // Alternative: everything except scheduled
-    }
-  }
-);
+// // ✅ TTL index (unchanged logic, already correct)
+// newnotificationSchema.index(
+//   { expiresAt: 1 },
+//   {
+//     expireAfterSeconds: 0,
+//     partialFilterExpression: { 
+//       expiresAt: { $exists: true },
+//       status: { $in: ['pending', 'accepted', 'expired'] }  // Only these statuses
+//       // status: { $ne: 'scheduled' }  // Alternative: everything except scheduled
+//     }
+//   }
+// );
 
 
 // Regular indexes (unchanged)

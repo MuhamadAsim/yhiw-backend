@@ -56,6 +56,7 @@ router.post('/:bookingId/status',  updateCustomerJobStatus);
 
 // Cancel job from customer side (after provider accepted)
 router.post('/job/cancel/:bookingId', customerCancelJob);
+router.post('/job/:bookingId/cancel', customerCancelJob);
 router.post('/:bookingId/cancel', customerCancelJob);
 
 

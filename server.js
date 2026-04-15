@@ -15,7 +15,7 @@ const startServer = async () => {
   // await printActiveCustomerServices();
   // await printAllUsers();
   // await printActiveCustomerServices();
-  startScheduler();
+  // startScheduler();
 
 
   app.listen(PORT, () => {
