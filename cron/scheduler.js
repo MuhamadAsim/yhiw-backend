@@ -61,7 +61,7 @@ export const activateScheduledJobsForCustomer = async (customerId) => {
     isScheduled: true,
     status: 'scheduled',
     scheduledAt: { $lte: now },
-    'customer._id': customerId
+    customerId: customerId  // ✅ FIX: Use customerId instead of customer._id
   }).select('bookingId serviceName customer scheduledAt servicePrice');
 
   if (!jobs.length) return [];
@@ -90,53 +90,43 @@ export const startScheduler = () => {
       const now = new Date();
       const expiresAt = new Date(now.getTime() + TTL_MINUTES * 60 * 1000);
 
-      console.log(`\n⏰ Running scheduler at ${now.toISOString()}`);
+      console.log(`⏰ Running scheduler at ${now.toISOString()}`);
 
       const jobsToActivate = await Notification.find({
         isScheduled: true,
         status: 'scheduled',
         scheduledAt: { $lte: now }
-      }).select('bookingId serviceName customer scheduledAt servicePrice activeServiceNotificationSent');
+      }).select('bookingId serviceName customerId customer scheduledAt servicePrice activeServiceNotificationSent'); // ✅ Added customerId
 
       if (jobsToActivate.length > 0) {
         const readyIds = [];
         const blockedIds = [];
 
         for (const job of jobsToActivate) {
-          const customerId = job.customer?._id;
-          
-          console.log(`\n🔍 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-          console.log(`🔍 CHECKING JOB: ${job.bookingId}`);
+          // ✅ FIX: Use customerId field instead of customer._id
+          const customerId = job.customerId;
+
+          console.log(`\n🔍 CHECKING JOB: ${job.bookingId}`);
           console.log(`🔍 Customer ID: ${customerId}`);
-          console.log(`🔍 Service: ${job.serviceName}`);
 
           if (!customerId) {
-            console.log(`⚠️ No customer ID - adding to readyIds`);
-            readyIds.push(job._id);
+            console.log(`⚠️ No customer ID - cannot verify, BLOCKING job`);
+            blockedIds.push(job._id);
             continue;
           }
 
           const customer = await User.findById(customerId).select('currentServiceId pushToken fullName');
           
-          console.log(`🔍 Customer from DB: ${customer?.fullName}`);
-          console.log(`🔍 currentServiceId RAW: "${customer?.currentServiceId}"`);
-          console.log(`🔍 currentServiceId TYPE: ${typeof customer?.currentServiceId}`);
-          console.log(`🔍 currentServiceId === null: ${customer?.currentServiceId === null}`);
-          console.log(`🔍 currentServiceId === '': ${customer?.currentServiceId === ''}`);
-          console.log(`🔍 currentServiceId length: ${customer?.currentServiceId?.length}`);
-          console.log(`🔍 Boolean check: ${!!customer?.currentServiceId}`);
+          console.log(`🔍 Customer: ${customer?.fullName}`);
+          console.log(`🔍 currentServiceId: "${customer?.currentServiceId}"`);
 
-          // CRITICAL FIX: Check if the value is actually a valid string with content
+          // Check for active service
           const hasActiveService = customer?.currentServiceId && 
                                    typeof customer.currentServiceId === 'string' &&
-                                   customer.currentServiceId.trim().length > 0 &&
-                                   customer.currentServiceId !== 'null' &&
-                                   customer.currentServiceId !== 'undefined';
-
-          console.log(`🔍 hasActiveService result: ${hasActiveService}`);
+                                   customer.currentServiceId.trim().length > 0;
 
           if (hasActiveService) {
-            console.log(`🚫 BLOCKING job ${job.bookingId} - Active service: ${customer.currentServiceId}`);
+            console.log(`🚫 BLOCKING - Active service: ${customer.currentServiceId}`);
             blockedIds.push(job._id);
 
             if (!job.activeServiceNotificationSent) {
@@ -153,13 +143,12 @@ export const startScheduler = () => {
                 $set: { activeServiceNotificationSent: true }
               });
 
-              console.log(`✅ Block notification sent for ${job.bookingId}`);
+              console.log(`✅ Block notification sent`);
             }
           } else {
-            console.log(`✅ ACTIVATING job ${job.bookingId} - No active service found`);
+            console.log(`✅ ACTIVATING - No active service`);
             readyIds.push(job._id);
           }
-          console.log(`🔍 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
         }
 
         if (readyIds.length > 0) {
@@ -209,8 +198,6 @@ export const startScheduler = () => {
         if (blockedIds.length > 0) {
           console.log(`⏸ ${blockedIds.length} job(s) held back — customers have active services.`);
         }
-      } else {
-        console.log(`📭 No scheduled jobs to activate at ${now.toISOString()}`);
       }
 
     } catch (err) {
@@ -218,5 +205,5 @@ export const startScheduler = () => {
     }
   });
 
-  console.log('🕐 Job scheduler started with DEBUG logging');
+  console.log('🕐 Job scheduler started - using customerId field');
 };
