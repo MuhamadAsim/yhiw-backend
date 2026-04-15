@@ -1,7 +1,7 @@
 // models/Notification.js
 import mongoose from 'mongoose';
 
-const notificationSchema = new mongoose.Schema({
+const newnotificationSchema = new mongoose.Schema({
   bookingId: {
     type: String,
     required: true,
@@ -111,7 +111,7 @@ const notificationSchema = new mongoose.Schema({
 
 
 // ✅ TTL index (unchanged logic, already correct)
-notificationSchema.index(
+newnotificationSchema.index(
   { expiresAt: 1 },
   {
     expireAfterSeconds: 0,
@@ -125,12 +125,12 @@ notificationSchema.index(
 
 
 // Regular indexes (unchanged)
-notificationSchema.index({ 'pickup.coordinates': '2dsphere' });
-notificationSchema.index({ serviceName: 1, createdAt: -1 });
-notificationSchema.index({ status: 1 });
+newnotificationSchema.index({ 'pickup.coordinates': '2dsphere' });
+newnotificationSchema.index({ serviceName: 1, createdAt: -1 });
+newnotificationSchema.index({ status: 1 });
 
 // ✅ updated index to use new fields
-notificationSchema.index({ isScheduled: 1, scheduledAt: 1 });
+newnotificationSchema.index({ isScheduled: 1, scheduledAt: 1 });
 
-const Notification = mongoose.model('Notification', notificationSchema);
+const Notification = mongoose.model('Notification', newnotificationSchema);
 export default Notification;
