@@ -90,7 +90,7 @@ export const startScheduler = () => {
             await sendExpoNotification({
               token: customer.pushToken,
               title: '⏳ Scheduled Service On Hold',
-              body: `Hi ${customer.fullName || 'there'}, your scheduled "${job.serviceName}" is ready but waiting for your current service to complete.`,
+              body: `Hi ${customer.fullName || 'there'}, you already have an active service in progress. Please complete it or cancel it before starting a new one.`,
               data: { bookingId: job.bookingId, type: 'scheduled_blocked' }
             });
             
