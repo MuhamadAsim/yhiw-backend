@@ -2,9 +2,10 @@
 import cron from 'node-cron';
 import Notification from '../models/notificationModel.js';
 import User from '../models/userModel.js';
+import { Expo } from 'expo-server-sdk';
 
 const TTL_MINUTES = 3;
-
+const expo = new Expo();
 
 /**
  * Sends an Expo push notification to a single token.
@@ -12,8 +13,6 @@ const TTL_MINUTES = 3;
  * never affect the already-committed job.
  */
 const sendExpoNotification = async ({ token, title, body, data = {} }) => {
-
-
   console.log(`\n📲 ===== SEND PUSH NOTIFICATION =====`);
   console.log(`   Token:  ${token}`);
   console.log(`   Title:  ${title}`);
@@ -53,11 +52,16 @@ const sendExpoNotification = async ({ token, title, body, data = {} }) => {
   console.log(`===== SEND PUSH NOTIFICATION END =====\n`);
 };
 
-
-
 export const activateScheduledJobsForCustomer = async (customerId) => {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + TTL_MINUTES * 60 * 1000);
+
+  // Check if customer has active service first
+  const customer = await User.findById(customerId).select('currentServiceId');
+  if (customer?.currentServiceId) {
+    console.log(`⏸ Cannot activate jobs - customer ${customerId} has active service: ${customer.currentServiceId}`);
+    return [];
+  }
 
   const jobs = await Notification.find({
     isScheduled: true,
@@ -66,7 +70,7 @@ export const activateScheduledJobsForCustomer = async (customerId) => {
     'customer._id': customerId
   }).select('bookingId serviceName customer scheduledAt servicePrice');
 
-  if (!jobs.length) return;
+  if (!jobs.length) return [];
 
   const ids = jobs.map((j) => j._id);
 
@@ -100,7 +104,6 @@ export const startScheduler = () => {
         scheduledAt: { $lte: now }
       }).select('bookingId serviceName customer scheduledAt servicePrice activeServiceNotificationSent');
 
-      // ✅ No early return — wrapped in if block
       if (jobsToActivate.length > 0) {
         const readyIds = [];
         const blockedIds = [];
@@ -115,15 +118,16 @@ export const startScheduler = () => {
 
           const customer = await User.findById(customerId).select('currentServiceId pushToken fullName');
 
-          if (customer?.currentServiceId) {
+          // FIX: Only block if currentServiceId exists AND is not null/empty
+          if (customer?.currentServiceId && customer.currentServiceId !== null && customer.currentServiceId !== '') {
             blockedIds.push(job._id);
 
             if (!job.activeServiceNotificationSent) {
               if (customer.pushToken) {
                 await sendExpoNotification({
                   token: customer.pushToken,
-                  title: '⏳ Scheduled Service Pending',
-                  body: `Hi ${customer.fullName || 'there'}, your scheduled service "${job.serviceName}" is ready but waiting for your current service to complete first.`,
+                  title: '⏳ Scheduled Service On Hold',
+                  body: `Hi ${customer.fullName || 'there'}, your scheduled service "${job.serviceName}" cannot start because you have an active service in progress. Please complete your current service first.`,
                   data: { bookingId: job.bookingId, type: 'scheduled_blocked' }
                 });
               }
@@ -132,11 +136,12 @@ export const startScheduler = () => {
                 $set: { activeServiceNotificationSent: true }
               });
 
-              console.log(`🔔 Blocked job ${job.bookingId} — customer has active service. Notification sent.`);
+              console.log(`🔔 Blocked job ${job.bookingId} — customer has active service: ${customer.currentServiceId}`);
             } else {
-              console.log(`⏸  Blocked job ${job.bookingId} — customer still busy. Notification already sent, skipping.`);
+              console.log(`⏸ Blocked job ${job.bookingId} — customer still busy.`);
             }
           } else {
+            // ONLY activate if NO active service
             readyIds.push(job._id);
           }
         }
@@ -186,7 +191,7 @@ export const startScheduler = () => {
         }
 
         if (blockedIds.length > 0) {
-          console.log(`⏸  ${blockedIds.length} job(s) held back — customers have active services.`);
+          console.log(`⏸ ${blockedIds.length} job(s) held back — customers have active services.`);
         }
       }
 
