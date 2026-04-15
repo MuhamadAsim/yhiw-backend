@@ -11,11 +11,11 @@ const PORT = 4000;
 /* -------------------- Start Server -------------------- */
 const startServer = async () => {
   await connectDB();
-  await printAllNotificationsStandalone();
+  // await printAllNotificationsStandalone();
   // await printActiveCustomerServices();
   // await printAllUsers();
   // await printActiveCustomerServices();
-  // startScheduler();
+  startScheduler();
 
 
   app.listen(PORT, () => {
