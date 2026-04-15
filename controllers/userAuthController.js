@@ -95,7 +95,7 @@ export const createUser = async (req, res) => {
 
   } catch (error) {
     console.error('Create User Error:', error);
-    
+
     // Handle duplicate key errors
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
@@ -242,7 +242,7 @@ export const updateUser = async (req, res) => {
 
   } catch (error) {
     console.error('Update User Error:', error);
-    
+
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -280,7 +280,7 @@ export const deleteAllUsers = async () => {
   try {
     // Count users before deletion
     const userCount = await User.countDocuments();
-    
+
     if (userCount === 0) {
       console.log('No users found to delete');
       return {
@@ -478,62 +478,62 @@ export const printAllNotificationsStandalone = async () => {
 
     console.log('\n📋 Notification List:\n');
 
-   notifications.forEach((notification, index) => {
-  const createdAt = notification.createdAt
-    ? new Date(notification.createdAt).toLocaleString()
-    : 'N/A';
+    notifications.forEach((notification, index) => {
+      const createdAt = notification.createdAt
+        ? new Date(notification.createdAt).toLocaleString()
+        : 'N/A';
 
-  const scheduledAt = notification.scheduledAt
-    ? new Date(notification.scheduledAt).toLocaleString()
-    : 'N/A';
+      const scheduledAt = notification.scheduledAt
+        ? new Date(notification.scheduledAt).toLocaleString()
+        : 'N/A';
 
-  const expiresAt = notification.expiresAt
-    ? new Date(notification.expiresAt).toLocaleString()
-    : 'N/A';
+      const expiresAt = notification.expiresAt
+        ? new Date(notification.expiresAt).toLocaleString()
+        : 'N/A';
 
-  const isScheduled = notification.isScheduled;
-  const hasScheduledAt = !!notification.scheduledAt;
-  const hasExpiresAt = !!notification.expiresAt;
+      const isScheduled = notification.isScheduled;
+      const hasScheduledAt = !!notification.scheduledAt;
+      const hasExpiresAt = !!notification.expiresAt;
 
-  console.log(`${index + 1}. Booking ID: ${notification.bookingId}`);
-  console.log(`   Status: ${notification.status}`);
-  console.log(`   Service: ${notification.serviceName || 'N/A'} (${notification.serviceCategory || 'N/A'})`);
-  console.log(`   Customer: ${notification.customer?.name || 'N/A'} (${notification.customer?.phone || 'N/A'})`);
+      console.log(`${index + 1}. Booking ID: ${notification.bookingId}`);
+      console.log(`   Status: ${notification.status}`);
+      console.log(`   Service: ${notification.serviceName || 'N/A'} (${notification.serviceCategory || 'N/A'})`);
+      console.log(`   Customer: ${notification.customer?.name || 'N/A'} (${notification.customer?.phone || 'N/A'})`);
 
-  console.log(`   Schedule Type: ${isScheduled ? 'Scheduled' : 'Immediate'}`);
-  console.log(`   Service Time: ${notification.serviceTime || 'N/A'}`);
-  console.log(`   Scheduled At: ${scheduledAt}`);
-  console.log(`   Expires At: ${expiresAt}`);
-  console.log(`   Created: ${createdAt}`);
+      console.log(`   Schedule Type: ${isScheduled ? 'Scheduled' : 'Immediate'}`);
+      console.log(`   Service Time: ${notification.serviceTime || 'N/A'}`);
+      console.log(`   Scheduled At: ${scheduledAt}`);
+      console.log(`   Expires At: ${expiresAt}`);
+      console.log(`   Created: ${createdAt}`);
 
-  // 🔍 VALIDATION CHECKS
-  let issues = [];
+      // 🔍 VALIDATION CHECKS
+      let issues = [];
 
-  if (isScheduled && !hasScheduledAt) {
-    issues.push('❌ Scheduled job WITHOUT scheduledAt');
-  }
+      if (isScheduled && !hasScheduledAt) {
+        issues.push('❌ Scheduled job WITHOUT scheduledAt');
+      }
 
-  if (isScheduled && hasExpiresAt) {
-    issues.push('🔥 BUG: Scheduled job HAS expiresAt (WILL BE DELETED)');
-  }
+      if (isScheduled && hasExpiresAt) {
+        issues.push('🔥 BUG: Scheduled job HAS expiresAt (WILL BE DELETED)');
+      }
 
-  if (!isScheduled && hasScheduledAt) {
-    issues.push('⚠️ Immediate job has scheduledAt');
-  }
+      if (!isScheduled && hasScheduledAt) {
+        issues.push('⚠️ Immediate job has scheduledAt');
+      }
 
-  if (!isScheduled && !hasExpiresAt) {
-    issues.push('⚠️ Immediate job missing expiresAt');
-  }
+      if (!isScheduled && !hasExpiresAt) {
+        issues.push('⚠️ Immediate job missing expiresAt');
+      }
 
-  if (issues.length > 0) {
-    console.log('   🚨 Issues Found:');
-    issues.forEach(issue => console.log(`      - ${issue}`));
-  } else {
-    console.log('   ✅ Data looks correct');
-  }
+      if (issues.length > 0) {
+        console.log('   🚨 Issues Found:');
+        issues.forEach(issue => console.log(`      - ${issue}`));
+      } else {
+        console.log('   ✅ Data looks correct');
+      }
 
-  console.log('   --------------------');
-});
+      console.log('   --------------------');
+    });
 
     console.log('\n📊 Summary:');
     console.log(`   Total Notifications: ${notifications.length}`);
@@ -566,10 +566,15 @@ export const printAllNotificationsStandalone = async () => {
 
 export const printActiveCustomerServices = async () => {
   try {
+
+
+    // Check the actual customer data
+    const customer = await User.findOne({ fullName: "Asim Ayub" }).select('fullName currentServiceId');
+    console.log('Customer data:', JSON.stringify(customer, null, 2));
     console.log("\n========== ACTIVE CUSTOMER SERVICES ==========");
 
     const customers = await User.find(
-      { 
+      {
         role: 'customer',
         currentServiceId: { $ne: null }
       },

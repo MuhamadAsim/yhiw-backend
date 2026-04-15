@@ -7,11 +7,6 @@ import { Expo } from 'expo-server-sdk';
 const TTL_MINUTES = 3;
 const expo = new Expo();
 
-/**
- * Sends an Expo push notification to a single token.
- * Never throws — failures are logged and swallowed so they
- * never affect the already-committed job.
- */
 const sendExpoNotification = async ({ token, title, body, data = {} }) => {
   console.log(`\n📲 ===== SEND PUSH NOTIFICATION =====`);
   console.log(`   Token:  ${token}`);
@@ -56,9 +51,8 @@ export const activateScheduledJobsForCustomer = async (customerId) => {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + TTL_MINUTES * 60 * 1000);
 
-  // Check if customer has active service first
   const customer = await User.findById(customerId).select('currentServiceId');
-  if (customer?.currentServiceId) {
+  if (customer?.currentServiceId && customer.currentServiceId !== null && customer.currentServiceId !== '') {
     console.log(`⏸ Cannot activate jobs - customer ${customerId} has active service: ${customer.currentServiceId}`);
     return [];
   }
@@ -96,7 +90,7 @@ export const startScheduler = () => {
       const now = new Date();
       const expiresAt = new Date(now.getTime() + TTL_MINUTES * 60 * 1000);
 
-      console.log(`⏰ Running scheduler at ${now.toISOString()}`);
+      console.log(`\n⏰ Running scheduler at ${now.toISOString()}`);
 
       const jobsToActivate = await Notification.find({
         isScheduled: true,
@@ -110,16 +104,39 @@ export const startScheduler = () => {
 
         for (const job of jobsToActivate) {
           const customerId = job.customer?._id;
+          
+          console.log(`\n🔍 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          console.log(`🔍 CHECKING JOB: ${job.bookingId}`);
+          console.log(`🔍 Customer ID: ${customerId}`);
+          console.log(`🔍 Service: ${job.serviceName}`);
 
           if (!customerId) {
+            console.log(`⚠️ No customer ID - adding to readyIds`);
             readyIds.push(job._id);
             continue;
           }
 
           const customer = await User.findById(customerId).select('currentServiceId pushToken fullName');
+          
+          console.log(`🔍 Customer from DB: ${customer?.fullName}`);
+          console.log(`🔍 currentServiceId RAW: "${customer?.currentServiceId}"`);
+          console.log(`🔍 currentServiceId TYPE: ${typeof customer?.currentServiceId}`);
+          console.log(`🔍 currentServiceId === null: ${customer?.currentServiceId === null}`);
+          console.log(`🔍 currentServiceId === '': ${customer?.currentServiceId === ''}`);
+          console.log(`🔍 currentServiceId length: ${customer?.currentServiceId?.length}`);
+          console.log(`🔍 Boolean check: ${!!customer?.currentServiceId}`);
 
-          // FIX: Only block if currentServiceId exists AND is not null/empty
-          if (customer?.currentServiceId && customer.currentServiceId !== null && customer.currentServiceId !== '') {
+          // CRITICAL FIX: Check if the value is actually a valid string with content
+          const hasActiveService = customer?.currentServiceId && 
+                                   typeof customer.currentServiceId === 'string' &&
+                                   customer.currentServiceId.trim().length > 0 &&
+                                   customer.currentServiceId !== 'null' &&
+                                   customer.currentServiceId !== 'undefined';
+
+          console.log(`🔍 hasActiveService result: ${hasActiveService}`);
+
+          if (hasActiveService) {
+            console.log(`🚫 BLOCKING job ${job.bookingId} - Active service: ${customer.currentServiceId}`);
             blockedIds.push(job._id);
 
             if (!job.activeServiceNotificationSent) {
@@ -136,14 +153,13 @@ export const startScheduler = () => {
                 $set: { activeServiceNotificationSent: true }
               });
 
-              console.log(`🔔 Blocked job ${job.bookingId} — customer has active service: ${customer.currentServiceId}`);
-            } else {
-              console.log(`⏸ Blocked job ${job.bookingId} — customer still busy.`);
+              console.log(`✅ Block notification sent for ${job.bookingId}`);
             }
           } else {
-            // ONLY activate if NO active service
+            console.log(`✅ ACTIVATING job ${job.bookingId} - No active service found`);
             readyIds.push(job._id);
           }
+          console.log(`🔍 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
         }
 
         if (readyIds.length > 0) {
@@ -193,6 +209,8 @@ export const startScheduler = () => {
         if (blockedIds.length > 0) {
           console.log(`⏸ ${blockedIds.length} job(s) held back — customers have active services.`);
         }
+      } else {
+        console.log(`📭 No scheduled jobs to activate at ${now.toISOString()}`);
       }
 
     } catch (err) {
@@ -200,5 +218,5 @@ export const startScheduler = () => {
     }
   });
 
-  console.log('🕐 Job scheduler started');
+  console.log('🕐 Job scheduler started with DEBUG logging');
 };
