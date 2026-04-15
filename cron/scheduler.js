@@ -1,4 +1,44 @@
-cron.schedule('* * * * *', async () => {
+// cron/scheduler.js
+import cron from 'node-cron';
+import Notification from '../models/notificationModel.js';
+import User from '../models/userModel.js';
+import { sendExpoNotification } from '../utils/notifications.js';
+
+const TTL_MINUTES = 3;
+
+export const activateScheduledJobsForCustomer = async (customerId) => {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + TTL_MINUTES * 60 * 1000);
+
+  const jobs = await Notification.find({
+    isScheduled: true,
+    status: 'scheduled',
+    scheduledAt: { $lte: now },
+    'customer._id': customerId
+  }).select('bookingId serviceName customer scheduledAt servicePrice');
+
+  if (!jobs.length) return;
+
+  const ids = jobs.map((j) => j._id);
+
+  await Notification.updateMany(
+    { _id: { $in: ids } },
+    {
+      $set: {
+        isScheduled: false,
+        status: 'pending',
+        expiresAt,
+        activeServiceNotificationSent: false
+      }
+    }
+  );
+
+  console.log(`✅ [activateScheduledJobsForCustomer] Activated ${jobs.length} job(s) for customer ${customerId}`);
+  return jobs;
+};
+
+export const startScheduler = () => {
+  cron.schedule('* * * * *', async () => {
     try {
       const now = new Date();
       const expiresAt = new Date(now.getTime() + TTL_MINUTES * 60 * 1000);
@@ -11,7 +51,7 @@ cron.schedule('* * * * *', async () => {
         scheduledAt: { $lte: now }
       }).select('bookingId serviceName customer scheduledAt servicePrice activeServiceNotificationSent');
 
-      // ✅ No early return — just wrap in an if block
+      // ✅ No early return — wrapped in if block
       if (jobsToActivate.length > 0) {
         const readyIds = [];
         const blockedIds = [];
@@ -45,7 +85,7 @@ cron.schedule('* * * * *', async () => {
 
               console.log(`🔔 Blocked job ${job.bookingId} — customer has active service. Notification sent.`);
             } else {
-              console.log(`⏸  Blocked job ${job.bookingId} — customer still busy. Notification already sent.`);
+              console.log(`⏸  Blocked job ${job.bookingId} — customer still busy. Notification already sent, skipping.`);
             }
           } else {
             readyIds.push(job._id);
@@ -55,7 +95,13 @@ cron.schedule('* * * * *', async () => {
         if (readyIds.length > 0) {
           const result = await Notification.updateMany(
             { _id: { $in: readyIds } },
-            { $set: { isScheduled: false, status: 'pending', expiresAt } }
+            {
+              $set: {
+                isScheduled: false,
+                status: 'pending',
+                expiresAt
+              }
+            }
           );
 
           const activatedJobs = jobsToActivate.filter((j) =>
@@ -99,3 +145,6 @@ cron.schedule('* * * * *', async () => {
       console.error('❌ Scheduler cron error:', err);
     }
   });
+
+  console.log('🕐 Job scheduler started');
+};
