@@ -450,6 +450,8 @@ export const printAllUsers = async (req, res) => {
 export const printAllNotificationsStandalone = async () => {
   try {
     const countBefore = await Notification.countDocuments();
+    // await Notification.collection.dropIndex("expiresAt_1");
+
 
     console.log('\n========== PRINTING ALL NOTIFICATIONS ==========');
     console.log(`📊 Total notifications found in Notification model: ${countBefore}`);
@@ -572,6 +574,7 @@ export const printActiveCustomerServices = async () => {
     const customer = await User.findOne({ fullName: "Asim Ayub" }).select('fullName currentServiceId');
     console.log('Customer data:', JSON.stringify(customer, null, 2));
     console.log("\n========== ACTIVE CUSTOMER SERVICES ==========");
+    
 
     const customers = await User.find(
       {

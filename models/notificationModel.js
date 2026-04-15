@@ -1,7 +1,7 @@
-// models/Notification.js
+// models/JobNotification.js (NEW FILE - don't replace the old one)
 import mongoose from 'mongoose';
 
-const newnotificationSchema = new mongoose.Schema({
+const jobNotificationSchema = new mongoose.Schema({
   bookingId: {
     type: String,
     required: true,
@@ -87,10 +87,10 @@ const newnotificationSchema = new mongoose.Schema({
   },
 
   // Schedule fields
-  isScheduled: { type: Boolean, default: false }, // ✅ fixed naming
+  isScheduled: { type: Boolean, default: false },
   serviceTime: { type: String, default: 'schedule_later' },
 
-  scheduledAt: { type: Date }, // ✅ replaced scheduledDate + scheduledTimeSlot
+  scheduledAt: { type: Date },
   activeServiceNotificationSent: {
     type: Boolean,
     default: false
@@ -104,33 +104,16 @@ const newnotificationSchema = new mongoose.Schema({
 
   createdAt: { type: Date, default: Date.now },
 
-  // TTL field (only for active jobs)
+  // TTL field - NO AUTO DELETION
   expiresAt: { type: Date }
 
-}, { timestamps: true });
+}, { timestamps: true, collection: 'jobnotifications' }); // ← DIFFERENT COLLECTION NAME
 
+// Regular indexes (NO TTL INDEX)
+jobNotificationSchema.index({ 'pickup.coordinates': '2dsphere' });
+jobNotificationSchema.index({ serviceName: 1, createdAt: -1 });
+jobNotificationSchema.index({ status: 1 });
+jobNotificationSchema.index({ isScheduled: 1, scheduledAt: 1 });
 
-// // ✅ TTL index (unchanged logic, already correct)
-// newnotificationSchema.index(
-//   { expiresAt: 1 },
-//   {
-//     expireAfterSeconds: 0,
-//     partialFilterExpression: { 
-//       expiresAt: { $exists: true },
-//       status: { $in: ['pending', 'accepted', 'expired'] }  // Only these statuses
-//       // status: { $ne: 'scheduled' }  // Alternative: everything except scheduled
-//     }
-//   }
-// );
-
-
-// Regular indexes (unchanged)
-newnotificationSchema.index({ 'pickup.coordinates': '2dsphere' });
-newnotificationSchema.index({ serviceName: 1, createdAt: -1 });
-newnotificationSchema.index({ status: 1 });
-
-// ✅ updated index to use new fields
-newnotificationSchema.index({ isScheduled: 1, scheduledAt: 1 });
-
-const Notification = mongoose.model('Notification', newnotificationSchema);
+const Notification = mongoose.model('JobNotification', jobNotificationSchema);
 export default Notification;
