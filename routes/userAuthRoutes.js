@@ -5,29 +5,18 @@ import {
   updateUser,
   validateToken,
 } from '../controllers/userAuthController.js';
-
-import { authMiddleware} from '../middleware/auth.js';
-
-
-
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Public routes (for signup/signin)
-router.post('/', createUser); // Signup
-router.get('/:firebaseUserId', getUserByFirebaseId); // Signin
+// ─── Public routes ────────────────────────────────────────────────────────────
+router.post('/', createUser);                        // POST  /api/users        → Signup
+router.get('/:firebaseUserId', getUserByFirebaseId); // GET   /api/users/:id    → Signin
 
-
-
+// ─── Protected routes ─────────────────────────────────────────────────────────
 router.use(authMiddleware);
 
-// Protected routes (add authentication middleware later)
-router.put('/:firebaseUserId', updateUser); // Update profile
-router.get('/auth/validate', validateToken);
-
-
-
-
-
+router.get('/validate/token', validateToken);        // GET   /api/users/validate/token
+router.put('/:firebaseUserId', updateUser);          // PUT   /api/users/:id    → Update profile
 
 export default router;
