@@ -3,7 +3,7 @@ import {
   createUser,
   getUserByFirebaseId,
   updateUser,
-
+  validateToken,
 } from '../controllers/userAuthController.js';
 
 import { authMiddleware} from '../middleware/auth.js';
@@ -23,6 +23,8 @@ router.use(authMiddleware);
 
 // Protected routes (add authentication middleware later)
 router.put('/:firebaseUserId', updateUser); // Update profile
+router.get('/auth/validate', validateToken);
+
 
 
 

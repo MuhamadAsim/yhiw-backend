@@ -271,6 +271,74 @@ export const updateUser = async (req, res) => {
 
 
 
+export const validateToken = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: 'No token provided'
+      });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    // Verify the token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Check if user still exists in DB
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User no longer exists'
+      });
+    }
+
+    // Check if user is active
+    if (user.status !== 'active') {
+      return res.status(401).json({
+        success: false,
+        message: 'Account is not active'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Token is valid',
+      data: {
+        id: user._id,
+        firebaseUserId: user.firebaseUserId,
+        role: user.role,
+        status: user.status,
+      }
+    });
+
+  } catch (error) {
+    // Token expired or invalid
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired token'
+      });
+    }
+
+    console.error('Validate Token Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error validating token'
+    });
+  }
+};
+
+
+
+
+
+
+
 /**
  * @desc    Delete ALL users from the database (DANGER ZONE)
  * @route   DELETE /api/users/delete-all
